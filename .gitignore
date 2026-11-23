@@ -1,0 +1,8 @@
+node_modules/
+backend/data/
+.env
+*.log
+.DS_Store
+.idea/
+.vscode/
+dist/*.apk

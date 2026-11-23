@@ -1,0 +1,60 @@
+# One command to run the whole backend:   docker compose up -d --build
+#   API + WebSocket  -> http://localhost:3000
+#   Mailbox (emails) -> http://localhost:8025   (verification / password-reset codes land here)
+# Optional public URL (for appetize.io or a phone outside your LAN):
+#   docker compose --profile tunnel up -d --build   then: docker compose logs tunnel | grep trycloudflare
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: messenger
+      POSTGRES_PASSWORD: messenger
+      POSTGRES_DB: messenger
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U messenger"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mail:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8025:8025" # web UI
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      mail:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://messenger:messenger@db:5432/messenger
+      PORT: 3000
+      SMTP_HOST: ${SMTP_HOST:-mail}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      MAIL_FROM: ${MAIL_FROM:-Messenger <no-reply@messenger.local>}
+      MASTER_KEY: ${MASTER_KEY:-} # empty -> generated once and stored in the api-data volume
+    ports:
+      - "3000:3000"
+    volumes:
+      - api-data:/data
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    depends_on: [api]
+    command: tunnel --no-autoupdate --url http://api:3000
+
+volumes:
+  db-data:
+  api-data:
