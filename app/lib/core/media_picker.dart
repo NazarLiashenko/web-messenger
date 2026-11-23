@@ -1,8 +1,9 @@
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mime/mime.dart';
+import 'package:video_compress/video_compress.dart' as vc;
 
 import '../models/models.dart';
 import 'format.dart';
@@ -67,17 +68,67 @@ class MediaPicker {
     );
   }
 
-  /// Chat video: max 20 MB. Camera recordings use a medium quality preset to stay small.
-  static Future<LocalAttachment?> pickVideo(ImageSource source) async {
-    final file = await _picker.pickVideo(source: source, maxDuration: const Duration(minutes: 3));
+  /// Chat video: compressed on the device (H.264, ~960x540), then max 20 MB after compression.
+  /// [onCompressing] is called once the file is picked, so the UI can show progress.
+  static Future<(LocalAttachment, Map<String, dynamic>)?> pickVideo(ImageSource source,
+      {void Function()? onCompressing}) async {
+    final file = await _picker.pickVideo(source: source, maxDuration: const Duration(minutes: 5));
     if (file == null) return null;
-    final length = await file.length();
-    if (length > maxMediaBytes) {
-      throw MediaException('Video is too large (${formatBytes(length)}). The limit is 20 MB — try a shorter clip.');
+    final meta = <String, dynamic>{};
+
+    if (kIsWeb) {
+      // Browsers have no native transcoder: upload as is, limit still applies.
+      final bytes = await file.readAsBytes();
+      if (bytes.length > maxMediaBytes) {
+        throw MediaException('Video is too large (${formatBytes(bytes.length)}). The limit is 20 MB.');
+      }
+      var mime = file.mimeType ?? lookupMimeType(file.name, headerBytes: bytes) ?? 'video/mp4';
+      if (!mime.startsWith('video/')) mime = 'video/mp4';
+      return (LocalAttachment(bytes: bytes, mime: mime, fileName: file.name), meta);
     }
-    final bytes = await file.readAsBytes();
-    var mime = file.mimeType ?? lookupMimeType(file.name, headerBytes: bytes) ?? 'video/mp4';
-    if (!mime.startsWith('video/')) mime = 'video/mp4';
-    return LocalAttachment(bytes: bytes, mime: mime, fileName: file.name, path: file.path);
+
+    onCompressing?.call();
+    final vc.MediaInfo? info;
+    try {
+      info = await vc.VideoCompress.compressVideo(
+        file.path,
+        quality: vc.VideoQuality.Res960x540Quality,
+        includeAudio: true,
+        deleteOrigin: false,
+      );
+    } catch (e) {
+      throw MediaException('Could not compress this video: $e');
+    }
+    if (info == null || info.path == null) throw MediaException('Video compression was cancelled');
+    final compressed = XFile(info.path!);
+    final length = await compressed.length();
+    if (length > maxMediaBytes) {
+      throw MediaException(
+          'Video is still too large after compression (${formatBytes(length)}). The limit is 20 MB — try a shorter clip.');
+    }
+    if (info.duration != null) meta['durationMs'] = info.duration!.round();
+    Uint8List? thumbnail;
+    try {
+      thumbnail = await vc.VideoCompress.getByteThumbnail(file.path, quality: 70);
+    } catch (_) {}
+    // The preview frame has the real display orientation (metadata rotation is unreliable).
+    final size = thumbnail == null ? null : await imageSize(thumbnail);
+    if (size != null) {
+      meta['width'] = size.width;
+      meta['height'] = size.height;
+    } else if ((info.width ?? 0) > 0 && (info.height ?? 0) > 0) {
+      meta['width'] = info.width;
+      meta['height'] = info.height;
+    }
+    return (
+      LocalAttachment(
+        bytes: await compressed.readAsBytes(),
+        mime: 'video/mp4',
+        fileName: 'video.mp4',
+        path: info.path,
+        thumbnail: thumbnail,
+      ),
+      meta,
+    );
   }
 }

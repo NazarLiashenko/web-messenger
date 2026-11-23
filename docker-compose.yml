@@ -44,6 +44,8 @@ services:
       MAIL_FROM: ${MAIL_FROM:-Messenger <no-reply@messenger.local>}
       MASTER_KEY: ${MASTER_KEY:-} # empty -> generated once and stored in the api-data volume
       MAILPIT_URL: http://mail:8025 # used by scripts/demo-peer.js inside the container
+      ACCESS_TOKEN_TTL_SEC: ${ACCESS_TOKEN_TTL_SEC:-900}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
     ports:
       - "3000:3000"
     volumes:

@@ -48,17 +48,30 @@ class ChatsController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _fill(List list) {
+    _chats
+      ..clear()
+      ..addEntries(list.map((j) {
+        final c = Chat.fromJson(Map<String, dynamic>.from(j as Map));
+        return MapEntry(c.id, c);
+      }));
+  }
+
   Future<void> load() async {
     loading = true;
+    // Offline-first: show the last known list (kept encrypted on the device) while fetching.
+    if (!loaded && _chats.isEmpty) {
+      final cached = await api.store.readCache('chats');
+      if (cached is List && _chats.isEmpty) {
+        _fill(cached);
+        loaded = true;
+      }
+    }
     notifyListeners();
     try {
       final data = await api.get('/api/chats');
-      _chats
-        ..clear()
-        ..addEntries((data['chats'] as List).map((j) {
-          final c = Chat.fromJson(Map<String, dynamic>.from(j as Map));
-          return MapEntry(c.id, c);
-        }));
+      _fill(data['chats'] as List);
+      api.store.writeCache('chats', data['chats']).ignore();
       error = null;
       loaded = true;
     } on ApiException catch (e) {

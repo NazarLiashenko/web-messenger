@@ -174,9 +174,19 @@ step('archive / unarchive / mute + chat list');
 
 r = await api('POST', '/api/auth/refresh', { body: { refreshToken: alice.refresh } });
 assert.ok(r.tokens.accessToken);
+const t1 = r.tokens.refreshToken;
+// Lost response: the previous token still works within the grace period...
 const r2 = await api('POST', '/api/auth/refresh', { body: { refreshToken: alice.refresh } });
-assert.equal(r2.error.code, 'SESSION_EXPIRED');
-step('refresh token rotation');
+assert.ok(r2.tokens?.accessToken, JSON.stringify(r2));
+// ...but a token two rotations old does not.
+const r3 = await api('POST', '/api/auth/refresh', { body: { refreshToken: r2.tokens.refreshToken } });
+assert.ok(r3.tokens);
+const r4 = await api('POST', '/api/auth/refresh', { body: { refreshToken: t1 } });
+assert.equal(r4.error?.code, 'SESSION_EXPIRED');
+await api('POST', '/api/auth/logout', { body: { refreshToken: r3.tokens.refreshToken } });
+const r5 = await api('POST', '/api/auth/refresh', { body: { refreshToken: r3.tokens.refreshToken } });
+assert.equal(r5.error?.code, 'SESSION_EXPIRED');
+step('refresh token rotation (+ grace period for lost responses, revoked on logout)');
 
 await api('POST', '/api/auth/forgot-password', { body: { email: bob.email } });
 await new Promise((res) => setTimeout(res, 500));

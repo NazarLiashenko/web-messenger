@@ -255,7 +255,7 @@ class ChatTile extends StatelessWidget {
         return true;
       },
       child: ListTile(
-        leading: UserAvatar(user: chat.peer, radius: 26, showOnline: true),
+        leading: UserAvatar(user: chat.peer, radius: 26, showOnline: context.watch<SocketService>().connected),
         title: Row(children: [
           Flexible(child: Text(chat.peer.username, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600))),
           if (chat.muted) ...[const SizedBox(width: 4), Icon(Icons.volume_off, size: 16, color: scheme.outline)],

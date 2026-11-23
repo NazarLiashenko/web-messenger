@@ -79,28 +79,32 @@ MessageStatus _status(String? s) => switch (s) {
     };
 
 class MediaInfo {
-  MediaInfo({required this.id, required this.url, required this.mime, required this.size});
+  MediaInfo({required this.id, required this.url, required this.mime, required this.size, this.thumbnailUrl});
   final String id;
   final String url;
   final String mime;
   final int size;
+  final String? thumbnailUrl; // video preview frame
 
   factory MediaInfo.fromJson(Map<String, dynamic> j) => MediaInfo(
         id: j['id'] as String,
         url: j['url'] as String,
         mime: j['mime'] as String? ?? '',
         size: (j['size'] as num?)?.toInt() ?? 0,
+        thumbnailUrl: j['thumbnailUrl'] as String?,
       );
 }
 
 /// A file picked / recorded on the device that is not uploaded yet.
 class LocalAttachment {
-  LocalAttachment({required this.bytes, required this.mime, required this.fileName, this.path});
+  LocalAttachment({required this.bytes, required this.mime, required this.fileName, this.path, this.thumbnail});
   final Uint8List bytes;
   final String mime;
   final String fileName;
   final String? path; // native file path (for local video / audio preview)
+  final Uint8List? thumbnail; // JPEG preview frame for videos
   String? uploadedMediaId;
+  String? uploadedThumbnailId;
 }
 
 class Message {
@@ -137,6 +141,7 @@ class Message {
   LocalAttachment? local;
   double? uploadProgress;
   String? error;
+  bool retryOnReconnect = false; // failed because of the network: resend automatically
 
   bool get isDeleted => deletedAt != null;
   bool get isPending => status == MessageStatus.sending || status == MessageStatus.failed;

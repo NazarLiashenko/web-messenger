@@ -107,6 +107,10 @@ docker compose exec api node scripts/demo-peer.js <your-username>
 It registers `dave` (password `Demo!pass1`), sends *you* a chat invitation and keeps running.
 Alternatively register a second account on another emulator / device.
 
+> **Tip for old Android Studio emulator images:** the system file picker (DocumentsUI) on some AVDs ignores
+> taps on files. Use its 🔍 search or the keyboard (Tab / arrows / Enter) to pick a photo or video. Real devices,
+> BlueStacks and appetize are not affected. Test media can be pushed with `adb push file.mp4 /sdcard/Movies/`.
+
 ### Suggested review path
 
 1. **Sign up** – try a weak password (live checklist, button disabled), an existing email/username (inline error).
@@ -117,7 +121,8 @@ Alternatively register a second account on another emulator / device.
 6. Chat: send text, photo, video, voice; watch ✓ sent → ✓✓ delivered → blue ✓✓ read; see "typing…".
 7. Long-press your message → **Edit** / **Delete**.
 8. Long-press / swipe a chat → **Archive**, **Mute**. Archived chats sit under *Archived chats*.
-9. Turn off Wi-Fi in the emulator and send something → red ⚠ *Not sent · tap to retry*.
+9. Stop the server (`docker compose stop api`) and send something → "Connecting…" banner, red ⚠ *Not sent*;
+   start it again (`docker compose start api`) → the message is delivered automatically.
 10. *Forgot password?* on the login screen → code by email → new password.
 
 ---
@@ -153,8 +158,9 @@ Alternatively register a second account on another emulator / device.
 
 ### Messaging
 - **Text, images, videos, voice messages** (record with the microphone, play inline with seek).
-- Images are resized & re-compressed on the device; **20 MB limit** after compression for images and videos
-  (checked on the client and enforced by the server).
+- Images are resized & re-compressed on the device; videos are **transcoded on the device** (H.264, 960×540) —
+  e.g. a 15.5 MB 1080p clip becomes ~2.7 MB. The **20 MB limit** applies after compression
+  (checked on the client and enforced by the server). Videos get a preview frame and duration.
 - **Status indicators**: 🕓 sending → ✓ sent → ✓✓ delivered → blue ✓✓ read, and red ⚠ **failed** with *tap to retry*.
   Sending is idempotent (client-generated id), so retries never duplicate messages.
 - **Edit** and **delete** your own messages (for everyone; "edited" label / "This message was deleted").
@@ -170,7 +176,10 @@ Alternatively register a second account on another emulator / device.
 - Every API error has a stable code and a human-readable message shown as inline field errors or snackbars.
 - Network loss → "Connecting…" banner, automatic reconnect & resync (missed messages, statuses, invites).
 - Optimistic UI with rollback: failed edits, archive/mute toggles revert to the last stable state; unsent
-  messages stay in the chat marked as failed until retried or removed.
+  messages stay in the chat marked as failed and are **re-sent automatically when the connection returns**
+  (or manually with *tap to retry*).
+- Offline start: the chat list and the last 50 messages of each chat are cached on the device (encrypted by the
+  platform keystore), so the app opens to the last known state even when the server is unreachable.
 - Expired access tokens are refreshed transparently (single-flight); an expired session leads back to login.
 
 ---
@@ -211,6 +220,7 @@ All sensitive data is encrypted **before** it is written to the database or disk
 | Photos, videos, voice messages, profile pictures | AES-256-GCM encrypted files |
 | Contacts / chat list (chat membership, invitation parties, message senders) | user ids stored encrypted; lookups use HMAC-SHA256 **blind indexes**, so the database alone does not reveal who talks to whom |
 | Push tokens, device names | AES-256-GCM |
+| On-device cache (tokens, chat list, recent messages) | Android Keystore / iOS Keychain (flutter_secure_storage), wiped on logout |
 | Passwords | scrypt (salted, memory-hard) — hashed, never encrypted |
 | Refresh tokens, email codes | SHA-256 / HMAC hashes only |
 

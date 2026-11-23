@@ -47,6 +47,7 @@ export function messageStatus(row) {
 export function serializeMessage(row, memberIds) {
   const sender = memberIds.find((id) => userKey(id) === row.sender_key) || null;
   const deleted = !!row.deleted_at;
+  const meta = deleted ? null : decryptJson(row.meta_enc);
   return {
     id: row.id,
     chatId: row.chat_id,
@@ -57,8 +58,14 @@ export function serializeMessage(row, memberIds) {
     media:
       deleted || !row.media_id
         ? null
-        : { id: row.media_id, url: mediaUrl(row.media_id), mime: row.media_mime, size: row.media_size },
-    meta: deleted ? null : decryptJson(row.meta_enc),
+        : {
+            id: row.media_id,
+            url: mediaUrl(row.media_id),
+            mime: row.media_mime,
+            size: row.media_size,
+            thumbnailUrl: meta?.thumbnailMediaId ? mediaUrl(meta.thumbnailMediaId) : null,
+          },
+    meta,
     createdAt: row.created_at,
     editedAt: row.edited_at,
     deletedAt: row.deleted_at,

@@ -37,6 +37,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _input = TextEditingController();
   final _focus = FocusNode();
   Message? _editing;
+  bool _compressing = false;
 
   @override
   void initState() {
@@ -236,11 +237,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final picked = await MediaPicker.pickImage(choice == 'camera' ? ImageSource.camera : ImageSource.gallery);
         if (picked != null) await _room.sendMedia('image', picked.$1, meta: picked.$2);
       } else {
-        final file = await MediaPicker.pickVideo(choice == 'record' ? ImageSource.camera : ImageSource.gallery);
-        if (file != null) await _room.sendMedia('video', file);
+        final picked = await MediaPicker.pickVideo(
+          choice == 'record' ? ImageSource.camera : ImageSource.gallery,
+          onCompressing: () => setState(() => _compressing = true),
+        );
+        if (mounted) setState(() => _compressing = false);
+        if (picked != null) await _room.sendMedia('video', picked.$1, meta: picked.$2);
       }
     } catch (e) {
-      if (mounted) showMessage(context, e);
+      if (mounted) {
+        setState(() => _compressing = false);
+        showMessage(context, e);
+      }
     }
   }
 
@@ -263,15 +271,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 onTap: () => Navigator.of(context).push(MaterialPageRoute(
                     builder: (_) => UserProfileScreen(userId: chat.peer.id, initial: chat.peer))),
                 child: Row(children: [
-                  UserAvatar(user: chat.peer, radius: 20, showOnline: true),
+                  UserAvatar(user: chat.peer, radius: 20, showOnline: connected),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(chat.peer.username, overflow: TextOverflow.ellipsis),
                       Text(
-                        typing ? 'typing…' : formatLastSeen(chat.peer),
+                        !connected ? 'waiting for connection…' : (typing ? 'typing…' : formatLastSeen(chat.peer)),
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: typing || chat.peer.online ? theme.colorScheme.primary : theme.colorScheme.outline,
+                          color: connected && (typing || chat.peer.online)
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.outline,
                           fontStyle: typing ? FontStyle.italic : null,
                         ),
                       ),
@@ -308,6 +318,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             builder: (context, _) => _messageList(context),
           ),
         ),
+        if (_compressing)
+          Container(
+            color: theme.colorScheme.surfaceContainerHigh,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: const Row(children: [
+              SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+              SizedBox(width: 12),
+              Text('Compressing video…'),
+            ]),
+          ),
         if (_editing != null) _editBanner(theme),
         _Composer(
           controller: _input,

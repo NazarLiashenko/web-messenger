@@ -102,8 +102,11 @@ class MessageBubble extends StatelessWidget {
           GestureDetector(
             onTap: onTapFailed,
             child: Padding(
-              padding: const EdgeInsets.only(right: 12, bottom: 4),
-              child: Text('Not sent${m.error != null ? ': ${m.error}' : ''} · tap to retry',
+              padding: const EdgeInsets.only(left: 48, right: 12, bottom: 4),
+              child: Text(
+                  'Not sent${m.error != null ? ': ${m.error}' : ''} · '
+                  '${m.retryOnReconnect ? 'will retry when back online, or tap' : 'tap to retry'}',
+                  textAlign: TextAlign.end,
                   style: TextStyle(color: scheme.error, fontSize: 12)),
             ),
           ),
@@ -151,6 +154,24 @@ class MessageBubble extends StatelessWidget {
           ),
         );
       case 'video':
+        final vw = (m.meta['width'] as num?)?.toDouble();
+        final vh = (m.meta['height'] as num?)?.toDouble();
+        final vRatio = (vw != null && vh != null && vh > 0) ? (vw / vh).clamp(0.6, 1.8) : 16 / 9;
+        final thumbUrl = api.absoluteUrl(m.media?.thumbnailUrl);
+        final Widget preview = m.local?.thumbnail != null
+            ? Image.memory(m.local!.thumbnail!, fit: BoxFit.cover)
+            : thumbUrl != null
+                ? CachedNetworkImage(
+                    imageUrl: thumbUrl,
+                    cacheKey: '${m.media?.id}-thumb',
+                    fit: BoxFit.cover,
+                    errorWidget: (_, _, _) => const SizedBox.shrink(),
+                  )
+                : const SizedBox.shrink();
+        final label = [
+          if (m.durationMs != null) formatDuration(m.durationMs!),
+          formatBytes(m.media?.size ?? m.local?.bytes.length ?? 0),
+        ].join(' · ');
         return GestureDetector(
           onTap: url == null
               ? null
@@ -159,21 +180,27 @@ class MessageBubble extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
             child: Container(
               width: 240,
-              height: 160,
               color: Colors.black87,
-              child: overlayProgress(Stack(children: [
-                const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 56)),
-                Positioned(
-                  left: 8,
-                  bottom: 8,
-                  child: Row(children: [
-                    const Icon(Icons.videocam, color: Colors.white70, size: 16),
-                    const SizedBox(width: 4),
-                    Text(formatBytes(m.media?.size ?? m.local?.bytes.length ?? 0),
-                        style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                  ]),
-                ),
-              ])),
+              child: AspectRatio(
+                aspectRatio: vRatio,
+                child: overlayProgress(Stack(fit: StackFit.expand, children: [
+                  preview,
+                  if (!uploading) const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 56)),
+                  Positioned(
+                    left: 8,
+                    bottom: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                      child: Row(children: [
+                        const Icon(Icons.videocam, color: Colors.white, size: 14),
+                        const SizedBox(width: 4),
+                        Text(label, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                      ]),
+                    ),
+                  ),
+                ])),
+              ),
             ),
           ),
         );

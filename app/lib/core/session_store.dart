@@ -40,6 +40,23 @@ class SessionStore {
     await _storage.write(key: _kUser, value: jsonEncode(user));
   }
 
+  /// Small offline cache (e.g. the chat list), encrypted by the platform keystore.
+  /// Wiped together with the session on logout.
+  Future<Object?> readCache(String key) async {
+    try {
+      final v = await _storage.read(key: 'cache_$key');
+      return v == null ? null : jsonDecode(v);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> writeCache(String key, Object? value) async {
+    try {
+      await _storage.write(key: 'cache_$key', value: jsonEncode(value));
+    } catch (_) {}
+  }
+
   Future<void> clear() async {
     accessToken = null;
     refreshToken = null;

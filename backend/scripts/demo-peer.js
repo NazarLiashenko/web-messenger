@@ -13,12 +13,18 @@ const EMAIL = 'dave@demo.local';
 const USERNAME = 'dave';
 const PASSWORD = 'Demo!pass1';
 
-async function api(method, path, { token, body } = {}) {
+let token = null; // current access token
+
+async function api(method, path, { token: auth, body } = {}, retried = false) {
   const res = await fetch(API + path, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${token}` } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (res.status === 401 && auth && !retried) {
+    token = (await session()).tokens.accessToken; // expired: log in again and retry once
+    return api(method, path, { token: true, body }, true);
+  }
   return { status: res.status, ...(await res.json().catch(() => ({}))) };
 }
 
@@ -46,12 +52,7 @@ async function session() {
 }
 
 const { user, tokens } = await session();
-let token = tokens.accessToken;
-let refresh = tokens.refreshToken;
-setInterval(async () => {
-  const r = await api('POST', '/api/auth/refresh', { body: { refreshToken: refresh } });
-  if (r.tokens) ({ accessToken: token, refreshToken: refresh } = r.tokens);
-}, 10 * 60 * 1000);
+token = tokens.accessToken;
 console.log(`[peer] logged in as ${user.username}`);
 
 if (target) {
@@ -64,7 +65,10 @@ if (target) {
 }
 
 const socket = io(API, { auth: (cb) => cb({ token }), transports: ['websocket'] });
-socket.on('connect', () => console.log('[peer] socket connected'));
+socket.on('connect', () => {
+  console.log('[peer] socket connected');
+  api('GET', '/api/chats', { token }).catch(() => {}); // like a real client: marks missed messages as delivered
+});
 socket.on('invite:new', async (inv) => {
   if (inv.direction !== 'incoming') return;
   await api('POST', `/api/invites/${inv.id}/accept`, { token });
@@ -85,3 +89,5 @@ socket.on('message:new', async ({ message }) => {
     body: { clientId: `peer-${Date.now()}`, type: 'text', text: reply },
   });
 });
+
+process.on('unhandledRejection', (e) => console.log('[peer] error:', e?.message || e)); // keep running if the server restarts

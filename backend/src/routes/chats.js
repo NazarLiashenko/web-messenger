@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db.js';
-import { decrypt, encrypt, encryptJson, userKey } from '../crypto.js';
+import { decrypt, decryptJson, encrypt, encryptJson, userKey } from '../crypto.js';
 import { ApiError, badRequest, forbidden, notFound, parse } from '../errors.js';
 import { requireAuth } from '../auth.js';
 import {
@@ -81,6 +81,7 @@ const sendSchema = z.object({
       height: z.number().int().positive().optional(),
       fileName: z.string().max(255).optional(),
       waveform: z.array(z.number()).max(100).optional(),
+      thumbnailMediaId: z.string().regex(/^[0-9a-f-]{36}$/i).optional(), // video preview (image media)
     })
     .optional()
     .nullable(),
@@ -99,6 +100,11 @@ chatsRouter.post('/:id/messages', async (req, res) => {
     const { rows } = await query('SELECT owner_id, kind FROM media WHERE id = $1', [body.mediaId]);
     if (!rows.length || rows[0].owner_id !== req.userId) throw notFound('Media');
     if (rows[0].kind !== body.type) throw badRequest('VALIDATION_ERROR', `Media is not ${body.type}`, { field: 'mediaId' });
+  }
+  const thumbId = body.meta?.thumbnailMediaId;
+  if (thumbId) {
+    const { rows } = await query('SELECT owner_id, kind FROM media WHERE id = $1', [thumbId]);
+    if (!rows.length || rows[0].owner_id !== req.userId || rows[0].kind !== 'image') throw notFound('Thumbnail');
   }
 
   const id = crypto.randomUUID();
@@ -173,6 +179,8 @@ messagesRouter.delete('/:id', async (req, res) => {
   const { row, memberIds } = await loadOwnMessage(req);
   await query('UPDATE messages SET deleted_at=now(), body_enc=NULL, meta_enc=NULL, media_id=NULL WHERE id=$1', [row.id]);
   await deleteMedia(row.media_id);
+  const oldMeta = row.meta_enc ? decryptJson(row.meta_enc) : null;
+  if (oldMeta?.thumbnailMediaId) await deleteMedia(oldMeta.thumbnailMediaId);
   const message = serializeMessage(await getMessage(row.id), memberIds);
   memberIds.forEach((uid) => emitToUser(uid, 'message:updated', { message }));
   res.json({ message });

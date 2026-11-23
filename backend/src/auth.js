@@ -36,20 +36,30 @@ export async function createSession(userId, device) {
   return tokenResponse(t);
 }
 
-/** Refresh-token rotation: each refresh token can be used exactly once. Sliding 30-day expiry. */
+/**
+ * Refresh-token rotation with a sliding 30-day expiry. Each refresh issues a new refresh token;
+ * the previous one stays valid for a 2-minute grace period so a lost response (app killed,
+ * network drop) does not log the user out.
+ */
 export async function rotateSession(refreshToken) {
+  const hash = sha256(refreshToken);
   const { rows } = await query(
-    'SELECT id, user_id FROM sessions WHERE refresh_hash = $1 AND revoked_at IS NULL AND expires_at > now()',
-    [sha256(refreshToken)],
+    `SELECT id, user_id, refresh_hash FROM sessions
+     WHERE revoked_at IS NULL AND expires_at > now()
+       AND (refresh_hash = $1 OR (prev_refresh_hash = $1 AND rotated_at > now() - interval '2 minutes'))`,
+    [hash],
   );
   if (!rows.length) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired. Please log in again.');
   const s = rows[0];
   const t = await issueTokens(s.user_id, s.id);
-  await query('UPDATE sessions SET refresh_hash=$2, expires_at=$3, last_used_at=now() WHERE id=$1', [
-    s.id,
-    t.refreshHash,
-    t.expiresAt,
-  ]);
+  // When the grace token is used, keep the original "previous" hash so the window is not extended.
+  const prev = s.refresh_hash === hash ? hash : null;
+  await query(
+    `UPDATE sessions SET refresh_hash=$2, expires_at=$3, last_used_at=now(),
+       prev_refresh_hash = COALESCE($4, prev_refresh_hash), rotated_at = CASE WHEN $4::text IS NULL THEN rotated_at ELSE now() END
+     WHERE id=$1`,
+    [s.id, t.refreshHash, t.expiresAt, prev],
+  );
   return { userId: s.user_id, tokens: tokenResponse(t) };
 }
 

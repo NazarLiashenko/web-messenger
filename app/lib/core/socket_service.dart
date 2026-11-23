@@ -22,6 +22,8 @@ class SocketService extends ChangeNotifier {
   bool _connected = false;
   bool _wanted = false;
   Timer? _retry;
+  Timer? _watchdog;
+  DateTime _openedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   static const _serverEvents = [
     'message:new',
@@ -43,17 +45,26 @@ class SocketService extends ChangeNotifier {
   void connect() {
     _wanted = true;
     _open();
+    // Watchdog: if the connection stays down (e.g. a stuck reconnect), rebuild it.
+    _watchdog ??= Timer.periodic(const Duration(seconds: 15), (_) {
+      if (_wanted && !_connected && DateTime.now().difference(_openedAt) > const Duration(seconds: 15)) {
+        _open();
+      }
+    });
   }
 
   void _open() {
     _dispose();
     final token = api.store.accessToken;
     if (!_wanted || token == null) return;
+    _openedAt = DateTime.now();
     final socket = io.io(
       api.baseUrl,
       io.OptionBuilder()
           .setTransports(['websocket'])
           .setAuth({'token': token})
+          // A fresh manager every time: the cached one is closed by dispose() and would never reconnect.
+          .enableForceNew()
           .enableReconnection()
           .setReconnectionDelay(1000)
           .setReconnectionDelayMax(5000)
@@ -107,6 +118,8 @@ class SocketService extends ChangeNotifier {
 
   void disconnect() {
     _wanted = false;
+    _watchdog?.cancel();
+    _watchdog = null;
     _dispose();
     _setConnected(false);
   }

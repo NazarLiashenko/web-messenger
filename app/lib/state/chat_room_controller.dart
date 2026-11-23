@@ -40,9 +40,17 @@ class ChatRoomController extends ChangeNotifier {
   Future<void> load() async {
     loading = true;
     error = null;
+    if (messages.isEmpty) {
+      // Offline-first: last known messages from the encrypted on-device cache.
+      final cached = await api.store.readCache('msgs_$chatId');
+      if (cached is List && messages.isEmpty) {
+        messages.addAll(cached.map((j) => Message.fromJson(Map<String, dynamic>.from(j as Map))));
+      }
+    }
     _notify();
     try {
       final data = await api.get('/api/chats/$chatId/messages', query: {'limit': 50});
+      api.store.writeCache('msgs_$chatId', data['messages']).ignore();
       final fresh = (data['messages'] as List).map((j) => Message.fromJson(Map<String, dynamic>.from(j as Map))).toList();
       final pending = messages.where((m) => m.isPending).toList();
       messages
@@ -120,6 +128,12 @@ class ChatRoomController extends ChangeNotifier {
       String? mediaId;
       final local = m.local;
       if (local != null) {
+        if (local.thumbnail != null && local.uploadedThumbnailId == null) {
+          final thumb = await api.upload('/api/media',
+              bytes: local.thumbnail!, filename: 'thumbnail.jpg', mime: 'image/jpeg', fields: {'kind': 'image'});
+          local.uploadedThumbnailId = (thumb['media'] as Map)['id'] as String;
+          m.meta = {...m.meta, 'thumbnailMediaId': local.uploadedThumbnailId};
+        }
         mediaId = local.uploadedMediaId;
         if (mediaId == null) {
           final up = await api.upload('/api/media',
@@ -145,6 +159,7 @@ class ChatRoomController extends ChangeNotifier {
     } on ApiException catch (e) {
       m.status = MessageStatus.failed;
       m.error = e.message;
+      m.retryOnReconnect = e.isNetwork || (e.status ?? 0) >= 500;
       m.uploadProgress = null;
       _notify();
     }
@@ -245,7 +260,12 @@ class ChatRoomController extends ChangeNotifier {
 
   void _onEvent(SocketEvent e) {
     if (e.name == 'connect') {
-      load(); // catch up after reconnect, keeping unsent messages
+      // Catch up after reconnect, then resend what failed because the network was down.
+      load().then((_) {
+        for (final m in messages.where((m) => m.status == MessageStatus.failed && m.retryOnReconnect).toList()) {
+          _deliver(m);
+        }
+      });
       return;
     }
     if (e.data is! Map) return;
