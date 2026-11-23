@@ -19,6 +19,13 @@ app.set('trust proxy', true);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors()); // the future web client is served from a different origin
 app.use(express.json({ limit: '1mb' }));
+if (process.env.LOG_REQUESTS !== 'false') {
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => console.log(`[http] ${req.method} ${req.originalUrl.split('?')[0]} ${res.statusCode} ${Date.now() - start}ms`));
+    next();
+  });
+}
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, push: pushEnabled(), time: new Date().toISOString() }));
 app.use('/api/auth', authRoutes);

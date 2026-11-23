@@ -43,6 +43,7 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       MAIL_FROM: ${MAIL_FROM:-Messenger <no-reply@messenger.local>}
       MASTER_KEY: ${MASTER_KEY:-} # empty -> generated once and stored in the api-data volume
+      MAILPIT_URL: http://mail:8025 # used by scripts/demo-peer.js inside the container
     ports:
       - "3000:3000"
     volumes:

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { io } from 'socket.io-client';
 
 const API = process.argv[2] || 'http://localhost:3000';
-const MAIL = process.argv[3] || 'http://localhost:8025';
+const MAIL = process.argv[3] || process.env.MAILPIT_URL || 'http://localhost:8025';
 const run = Date.now().toString(36);
 const PASSWORD = 'Str0ng!Pass';
 
