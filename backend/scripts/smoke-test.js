@@ -243,6 +243,61 @@ r = await api('GET', '/api/chats', { token: carol.token });
 assert.equal(r.chats.find((c) => c.id === groupId).unreadCount, 0);
 step('group messages reach every member; per-member unread counters');
 
+/* ---------------- polls ---------------- */
+r = await api('POST', `/api/chats/${chatId}/polls`, { token: alice.token, body: { clientId: 'p0', question: 'Q?', options: ['a', 'b'] } });
+assert.equal(r.status, 403); // polls are for groups
+r = await api('POST', `/api/chats/${groupId}/polls`, { token: alice.token, body: { clientId: 'p1', question: 'Where?', options: ['Lake', 'lake'] } });
+assert.equal(r.error.code, 'VALIDATION_ERROR'); // duplicate options
+const pollEvt = waitFor(sc, 'message:new', ({ message }) => message.type === 'poll');
+r = await api('POST', `/api/chats/${groupId}/polls`, {
+  token: alice.token,
+  body: { clientId: 'p1', question: 'Where do we go?', options: ['Lake', 'Mountains', 'City'], anonymous: false },
+});
+assert.equal(r.status, 201, JSON.stringify(r));
+const pollId = r.message.poll.id;
+const pollMsgId = r.message.id;
+assert.equal(r.message.poll.creatorIsMe, true);
+assert.equal((await pollEvt).message.poll.creatorIsMe, false);
+const voteEvt = waitFor(sa, 'poll:updated', (d) => d.poll.totalVoters === 1);
+r = await api('PUT', `/api/polls/${pollId}/vote`, { token: bob.token, body: { options: [0] } });
+assert.deepEqual(r.poll.myVotes, [0]);
+assert.deepEqual(r.poll.options[0].voterIds, [bob.id]); // public poll shows voters
+await voteEvt;
+r = await api('PUT', `/api/polls/${pollId}/vote`, { token: bob.token, body: { options: [0, 1] } });
+assert.equal(r.status, 400); // single choice
+r = await api('PUT', `/api/polls/${pollId}/vote`, { token: carol.token, body: { options: [1] } });
+r = await api('PUT', `/api/polls/${pollId}/vote`, { token: bob.token, body: { options: [1] } }); // change vote
+assert.deepEqual(r.poll.options.map((o) => o.votes), [0, 2, 0]);
+r = await api('DELETE', `/api/polls/${pollId}/vote`, { token: carol.token }); // retract
+assert.deepEqual(r.poll.myVotes, []);
+assert.equal(r.poll.totalVoters, 1);
+r = await api('PATCH', `/api/messages/${pollMsgId}`, { token: alice.token, body: { text: 'edited' } });
+assert.equal(r.status, 400);
+r = await api('PUT', `/api/polls/${pollId}/vote`, { token: (await createUser('dan')).token, body: { options: [0] } });
+assert.equal(r.status, 404); // outsiders cannot vote
+r = await api('POST', `/api/polls/${pollId}/close`, { token: bob.token });
+assert.equal(r.status, 403);
+r = await api('POST', `/api/polls/${pollId}/close`, { token: alice.token });
+assert.equal(r.poll.closed, true);
+r = await api('PUT', `/api/polls/${pollId}/vote`, { token: carol.token, body: { options: [2] } });
+assert.equal(r.error.code, 'POLL_CLOSED');
+
+r = await api('POST', `/api/chats/${groupId}/polls`, {
+  token: bob.token,
+  body: { clientId: 'p2', question: 'Pizza toppings?', options: ['Cheese', 'Mushrooms', 'Olives'], anonymous: true, multiple: true },
+});
+const anonId = r.message.poll.id;
+await api('PUT', `/api/polls/${anonId}/vote`, { token: alice.token, body: { options: [0, 2] } });
+r = await api('PUT', `/api/polls/${anonId}/vote`, { token: carol.token, body: { options: [0] } });
+assert.deepEqual(r.poll.options.map((o) => o.votes), [2, 0, 1]);
+assert.equal(r.poll.totalVoters, 2);
+assert.ok(r.poll.options.every((o) => o.voterIds === null)); // anonymous: nobody sees voters
+const stored = await api('GET', `/api/chats/${groupId}/messages`, { token: alice.token });
+assert.deepEqual(stored.messages.find((m) => m.type === 'poll' && m.poll.id === anonId).poll.myVotes, [0, 2]);
+r = await api('GET', `/api/chats/${groupId}/search?q=toppings`, { token: carol.token });
+assert.equal(r.total, 1); // poll questions are searchable
+step('polls: public / anonymous, single / multiple choice, vote, change, retract, close (creator), realtime');
+
 r = await api('PATCH', `/api/groups/${groupId}`, { token: bob.token, body: { title: 'Hacked' } });
 assert.equal(r.status, 403);
 const renamed = waitFor(sc, 'chat:updated', (c) => c.id === groupId && c.title === 'Trip 🏕');

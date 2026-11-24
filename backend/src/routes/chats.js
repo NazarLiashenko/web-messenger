@@ -18,13 +18,14 @@ import {
 import { deleteMedia } from '../services/media.js';
 import { emitToUser, isOnline } from '../realtime.js';
 import { pushToUser } from '../push.js';
+import { withPolls } from './polls.js';
 
 export const chatsRouter = Router();
 export const messagesRouter = Router();
 chatsRouter.use(requireAuth);
 messagesRouter.use(requireAuth);
 
-const PREVIEW = { image: '📷 Photo', video: '🎬 Video', audio: '🎤 Voice message' };
+const PREVIEW = { image: '📷 Photo', video: '🎬 Video', audio: '🎤 Voice message', poll: '📊 Poll' };
 export const messagePreview = (m) => (m.type === 'text' ? m.text : m.text ? `${PREVIEW[m.type]}: ${m.text}` : PREVIEW[m.type]);
 
 chatsRouter.get('/', async (req, res) => {
@@ -65,7 +66,7 @@ chatsRouter.get('/:id/messages', async (req, res) => {
     [req.params.id, before, limit + 1],
   );
   const hasMore = rows.length > limit;
-  const messages = rows.slice(0, limit).reverse().map((r) => serializeMessage(r, memberIds));
+  const messages = await withPolls(rows.slice(0, limit).reverse().map((r) => serializeMessage(r, memberIds)), req.userId);
   res.json({ messages, hasMore });
 });
 
@@ -207,6 +208,7 @@ async function loadOwnMessage(req) {
 messagesRouter.patch('/:id', async (req, res) => {
   const body = parse(z.object({ text: z.string().max(4000) }), req.body);
   const { row, memberIds } = await loadOwnMessage(req);
+  if (row.type === 'poll') throw badRequest('VALIDATION_ERROR', 'Polls cannot be edited');
   const text = body.text.trim();
   if (row.type === 'text' && !text) throw badRequest('VALIDATION_ERROR', 'Message cannot be empty', { field: 'text' });
   await query('UPDATE messages SET body_enc=$2, edited_at=now() WHERE id=$1', [row.id, encrypt(text || null)]);
