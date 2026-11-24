@@ -172,6 +172,21 @@ r = await api('GET', '/api/chats', { token: alice.token });
 assert.equal(r.chats[0].lastMessage.type, 'image');
 step('archive / unarchive / mute + chat list');
 
+/* ---------------- search inside encrypted messages ---------------- */
+for (const [i, text] of ['Meet at the Café at 7', 'café or tea?', 'nothing here', 'CAFÉ again'].entries()) {
+  r = await api('POST', `/api/chats/${chatId}/messages`, { token: i % 2 ? bob.token : alice.token, body: { clientId: `s${i}`, type: 'text', text } });
+  assert.equal(r.status, 201);
+}
+r = await api('GET', `/api/chats/${chatId}/search?q=${encodeURIComponent('café')}`, { token: bob.token });
+assert.equal(r.total, 3, JSON.stringify(r));
+assert.ok(new Date(r.results[0].createdAt) >= new Date(r.results[2].createdAt)); // newest first
+assert.equal(r.results[1].senderId, bob.id);
+r = await api('GET', `/api/chats/${chatId}/search?q=zzz`, { token: alice.token });
+assert.equal(r.total, 0);
+r = await api('GET', `/api/chats/00000000-0000-4000-8000-000000000000/search?q=cafe`, { token: alice.token });
+assert.equal(r.status, 404); // not a member
+step('search inside encrypted messages (case-insensitive, members only)');
+
 /* ---------------- group chats ---------------- */
 const carol = await createUser('carol');
 const sc = io(API, { auth: { token: carol.token }, transports: ['websocket'] });
@@ -251,6 +266,10 @@ r = await api('GET', `/api/chats/${groupId}/messages?limit=100`, { token: bob.to
 const events = r.messages.filter((m) => m.type === 'system').map((m) => m.meta.event);
 assert.deepEqual(events, ['created', 'joined', 'joined', 'renamed', 'removed', 'left']);
 assert.equal(r.messages.find((m) => m.text === 'Hi group').senderId, alice.id); // sender kept after leaving
+r = await api('GET', `/api/chats/${groupId}/search?q=group`, { token: carol.token });
+assert.equal(r.status, 404); // removed members cannot search the group
+r = await api('GET', `/api/chats/${groupId}/search?q=GROUP`, { token: bob.token });
+assert.equal(r.total, 1);
 step('group: rename + remove (owner only), leave → ownership passes on, history keeps senders');
 sc.close();
 

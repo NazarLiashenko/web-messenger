@@ -69,6 +69,43 @@ chatsRouter.get('/:id/messages', async (req, res) => {
   res.json({ messages, hasMore });
 });
 
+/*
+ * Search inside one chat. Message bodies are AES-GCM encrypted, so the database cannot match text;
+ * the server decrypts this chat's messages in memory (never written back anywhere) and matches
+ * case-insensitively. Only members can search, and only the chat they belong to.
+ */
+const SEARCH_LIMIT = 500;
+export const searchKey = (s) => s.toLowerCase();
+
+chatsRouter.get('/:id/search', async (req, res) => {
+  const memberIds = await assertMember(req.params.id, req.userId);
+  const q = searchKey(String(req.query.q || '').trim());
+  if (!q) return res.json({ query: '', results: [], total: 0 });
+  if (q.length > 100) throw badRequest('VALIDATION_ERROR', 'Search text is too long (max 100 characters)', { field: 'q' });
+  const { rows } = await query(
+    `SELECT id, created_at, sender_key, type, body_enc FROM messages
+     WHERE chat_id = $1 AND deleted_at IS NULL AND body_enc IS NOT NULL
+     ORDER BY created_at DESC`,
+    [req.params.id],
+  );
+  const results = [];
+  let total = 0;
+  for (const r of rows) {
+    const text = decrypt(r.body_enc);
+    if (!text || !searchKey(text).includes(q)) continue;
+    total++;
+    if (results.length < SEARCH_LIMIT) {
+      results.push({
+        id: r.id,
+        createdAt: r.created_at,
+        senderId: memberIds.find((id) => userKey(id) === r.sender_key) ?? null,
+        type: r.type,
+      });
+    }
+  }
+  res.json({ query: q, results, total }); // newest first
+});
+
 const sendSchema = z.object({
   clientId: z.string().min(1).max(64),
   type: z.enum(['text', 'image', 'video', 'audio']),
