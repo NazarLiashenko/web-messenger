@@ -30,11 +30,21 @@ class StatusIcon extends StatelessWidget {
 }
 
 class MessageBubble extends StatelessWidget {
-  const MessageBubble({super.key, required this.message, required this.mine, this.onLongPress, this.onTapFailed});
+  const MessageBubble({
+    super.key,
+    required this.message,
+    required this.mine,
+    this.onLongPress,
+    this.onSecondaryTap,
+    this.onTapFailed,
+  });
 
   final Message message;
   final bool mine;
   final VoidCallback? onLongPress;
+
+  /// Right click (web / desktop) with the pointer position.
+  final void Function(Offset globalPosition)? onSecondaryTap;
   final VoidCallback? onTapFailed;
 
   @override
@@ -46,32 +56,47 @@ class MessageBubble extends StatelessWidget {
     final meta = fg.withValues(alpha: 0.6);
     final hasMedia = !m.isDeleted && m.type != 'text';
 
-    final footer = Row(mainAxisSize: MainAxisSize.min, children: [
-      if (m.editedAt != null && !m.isDeleted) Text('edited · ', style: TextStyle(fontSize: 11, color: meta)),
-      Text(DateFormat.Hm().format(m.createdAt), style: TextStyle(fontSize: 11, color: meta)),
-      if (mine) ...[const SizedBox(width: 4), StatusIcon(status: m.status, color: meta, size: 15)],
-    ]);
+    final footer = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (m.editedAt != null && !m.isDeleted) Text('edited · ', style: TextStyle(fontSize: 11, color: meta)),
+        Text(DateFormat.Hm().format(m.createdAt), style: TextStyle(fontSize: 11, color: meta)),
+        if (mine) ...[const SizedBox(width: 4), StatusIcon(status: m.status, color: meta, size: 15)],
+      ],
+    );
 
     Widget content;
     if (m.isDeleted) {
-      content = Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.block, size: 16, color: meta),
-        const SizedBox(width: 6),
-        Flexible(child: Text('This message was deleted', style: TextStyle(color: meta, fontStyle: FontStyle.italic))),
-      ]);
-    } else {
-      content = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-        if (hasMedia) _media(context, m, fg),
-        if (m.text != null && m.text!.isNotEmpty)
-          Padding(
-            padding: EdgeInsets.only(top: hasMedia ? 6 : 0),
-            child: Text(m.text!, style: TextStyle(color: fg, fontSize: 15.5)),
+      content = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.block, size: 16, color: meta),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              'This message was deleted',
+              style: TextStyle(color: meta, fontStyle: FontStyle.italic),
+            ),
           ),
-      ]);
+        ],
+      );
+    } else {
+      content = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (hasMedia) _media(context, m, fg),
+          if (m.text != null && m.text!.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(top: hasMedia ? 6 : 0),
+              child: Text(m.text!, style: TextStyle(color: fg, fontSize: 15.5)),
+            ),
+        ],
+      );
     }
 
-    final bubble = Container(
-      constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.78),
+    Widget bubble(double maxWidth) => Container(
+      constraints: BoxConstraints(maxWidth: maxWidth),
       margin: EdgeInsets.only(left: mine ? 48 : 8, right: mine ? 8 : 48, top: 2, bottom: 2),
       padding: EdgeInsets.fromLTRB(hasMedia ? 6 : 12, hasMedia ? 6 : 8, hasMedia ? 6 : 10, 6),
       decoration: BoxDecoration(
@@ -83,34 +108,47 @@ class MessageBubble extends StatelessWidget {
           bottomRight: Radius.circular(mine ? 4 : 16),
         ),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-        content,
-        const SizedBox(height: 2),
-        footer,
-      ]),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [content, const SizedBox(height: 2), footer],
+      ),
     );
 
+    // Width of the message list (a pane on wide layouts), capped so lines stay readable on big screens.
+    return LayoutBuilder(builder: (context, box) => _layout(context, box.maxWidth, bubble));
+  }
+
+  Widget _layout(BuildContext context, double listWidth, Widget Function(double maxWidth) bubbleOf) {
+    final scheme = Theme.of(context).colorScheme;
+    final m = message;
+    final bubble = bubbleOf(listWidth * 0.78 > 600 ? 600 : listWidth * 0.78);
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Column(crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start, children: [
-        GestureDetector(
-          onLongPress: m.isDeleted ? null : onLongPress,
-          onTap: m.status == MessageStatus.failed ? onTapFailed : null,
-          child: bubble,
-        ),
-        if (m.status == MessageStatus.failed)
+      child: Column(
+        crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
           GestureDetector(
-            onTap: onTapFailed,
-            child: Padding(
-              padding: const EdgeInsets.only(left: 48, right: 12, bottom: 4),
-              child: Text(
+            onLongPress: m.isDeleted ? null : onLongPress,
+            onSecondaryTapUp: m.isDeleted || onSecondaryTap == null ? null : (d) => onSecondaryTap!(d.globalPosition),
+            onTap: m.status == MessageStatus.failed ? onTapFailed : null,
+            child: bubble,
+          ),
+          if (m.status == MessageStatus.failed)
+            GestureDetector(
+              onTap: onTapFailed,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 48, right: 12, bottom: 4),
+                child: Text(
                   'Not sent${m.error != null ? ': ${m.error}' : ''} · '
                   '${m.retryOnReconnect ? 'will retry when back online, or tap' : 'tap to retry'}',
                   textAlign: TextAlign.end,
-                  style: TextStyle(color: scheme.error, fontSize: 12)),
+                  style: TextStyle(color: scheme.error, fontSize: 12),
+                ),
+              ),
             ),
-          ),
-      ]),
+        ],
+      ),
     );
   }
 
@@ -119,15 +157,18 @@ class MessageBubble extends StatelessWidget {
     final url = api.absoluteUrl(m.media?.url);
     final uploading = m.status == MessageStatus.sending && m.local != null && m.local!.uploadedMediaId == null;
 
-    Widget overlayProgress(Widget child) => Stack(alignment: Alignment.center, children: [
-          child,
-          if (uploading)
-            Container(
-              decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
-              padding: const EdgeInsets.all(10),
-              child: CircularProgressIndicator(value: m.uploadProgress, color: Colors.white, strokeWidth: 3),
-            ),
-        ]);
+    Widget overlayProgress(Widget child) => Stack(
+      alignment: Alignment.center,
+      children: [
+        child,
+        if (uploading)
+          Container(
+            decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+            padding: const EdgeInsets.all(10),
+            child: CircularProgressIndicator(value: m.uploadProgress, color: Colors.white, strokeWidth: 3),
+          ),
+      ],
+    );
 
     switch (m.type) {
       case 'image':
@@ -146,11 +187,17 @@ class MessageBubble extends StatelessWidget {
         return GestureDetector(
           onTap: url == null && m.local == null
               ? null
-              : () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => ImageViewerScreen(url: url, bytes: m.local?.bytes, cacheKey: m.media?.id))),
+              : () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ImageViewerScreen(url: url, bytes: m.local?.bytes, cacheKey: m.media?.id),
+                  ),
+                ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
-            child: SizedBox(width: 240, child: AspectRatio(aspectRatio: ratio, child: overlayProgress(img))),
+            child: SizedBox(
+              width: 240,
+              child: AspectRatio(aspectRatio: ratio, child: overlayProgress(img)),
+            ),
           ),
         );
       case 'video':
@@ -161,13 +208,13 @@ class MessageBubble extends StatelessWidget {
         final Widget preview = m.local?.thumbnail != null
             ? Image.memory(m.local!.thumbnail!, fit: BoxFit.cover)
             : thumbUrl != null
-                ? CachedNetworkImage(
-                    imageUrl: thumbUrl,
-                    cacheKey: '${m.media?.id}-thumb',
-                    fit: BoxFit.cover,
-                    errorWidget: (_, _, _) => const SizedBox.shrink(),
-                  )
-                : const SizedBox.shrink();
+            ? CachedNetworkImage(
+                imageUrl: thumbUrl,
+                cacheKey: '${m.media?.id}-thumb',
+                fit: BoxFit.cover,
+                errorWidget: (_, _, _) => const SizedBox.shrink(),
+              )
+            : const SizedBox.shrink();
         final label = [
           if (m.durationMs != null) formatDuration(m.durationMs!),
           formatBytes(m.media?.size ?? m.local?.bytes.length ?? 0),
@@ -183,23 +230,30 @@ class MessageBubble extends StatelessWidget {
               color: Colors.black87,
               child: AspectRatio(
                 aspectRatio: vRatio,
-                child: overlayProgress(Stack(fit: StackFit.expand, children: [
-                  preview,
-                  if (!uploading) const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 56)),
-                  Positioned(
-                    left: 8,
-                    bottom: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
-                      child: Row(children: [
-                        const Icon(Icons.videocam, color: Colors.white, size: 14),
-                        const SizedBox(width: 4),
-                        Text(label, style: const TextStyle(color: Colors.white, fontSize: 12)),
-                      ]),
-                    ),
+                child: overlayProgress(
+                  Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      preview,
+                      if (!uploading) const Center(child: Icon(Icons.play_circle_fill, color: Colors.white, size: 56)),
+                      Positioned(
+                        left: 8,
+                        bottom: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.videocam, color: Colors.white, size: 14),
+                              const SizedBox(width: 4),
+                              Text(label, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ])),
+                ),
               ),
             ),
           ),
@@ -208,14 +262,17 @@ class MessageBubble extends StatelessWidget {
         return SizedBox(
           width: 230,
           child: uploading
-              ? Row(children: [
-                  SizedBox(
+              ? Row(
+                  children: [
+                    SizedBox(
                       width: 36,
                       height: 36,
-                      child: CircularProgressIndicator(value: m.uploadProgress, strokeWidth: 3)),
-                  const SizedBox(width: 12),
-                  Text('Voice message · ${formatDuration(m.durationMs ?? 0)}', style: TextStyle(color: fg)),
-                ])
+                      child: CircularProgressIndicator(value: m.uploadProgress, strokeWidth: 3),
+                    ),
+                    const SizedBox(width: 12),
+                    Text('Voice message · ${formatDuration(m.durationMs ?? 0)}', style: TextStyle(color: fg)),
+                  ],
+                )
               : AudioMessage(url: url, localPath: m.local?.path, durationMs: m.durationMs, color: fg),
         );
     }

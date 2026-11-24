@@ -5,7 +5,7 @@ import '../core/format.dart';
 import '../models/models.dart';
 import '../state/invites_controller.dart';
 import '../widgets/common.dart';
-import 'chat_screen.dart';
+import '../core/chat_navigation.dart';
 import 'search_screen.dart';
 import 'user_profile_screen.dart';
 
@@ -109,7 +109,7 @@ class _InviteTileState extends State<_InviteTile> {
                       // so grab the navigator first.
                       final nav = Navigator.of(context);
                       final chat = await ctrl.accept(i);
-                      nav.push(MaterialPageRoute(builder: (_) => ChatScreen(chatId: chat.id)));
+                      if (nav.mounted) ChatNavigation.open(nav.context, chat.id);
                     }),
                   ),
                 ])

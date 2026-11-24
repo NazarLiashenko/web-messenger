@@ -195,7 +195,7 @@ class ChatsController extends ChangeNotifier {
     }
     chat.lastMessage = m;
     chat.lastActivityAt = m.createdAt;
-    final viewing = notifications.openChatId == m.chatId && notifications.appInForeground;
+    final viewing = notifications.isViewing(m.chatId);
     if (!mine && !viewing) chat.unreadCount += 1;
     notifyListeners();
     if (!mine && !chat.muted) {

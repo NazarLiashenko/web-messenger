@@ -13,8 +13,11 @@ class NotificationService {
   /// Whether the app is currently visible.
   bool appInForeground = true;
 
-  /// Chat currently open on screen (no notification for it while visible).
-  String? openChatId;
+  /// Chats currently open on screen (no notification for them while visible).
+  /// Several on wide layouts, where chats are shown side by side.
+  final openChatIds = <String>{};
+
+  bool isViewing(String chatId) => appInForeground && openChatIds.contains(chatId);
 
   /// Called with the payload (`chat:ID` or `invites`) when a notification is tapped.
   void Function(String payload)? onTap;
@@ -62,7 +65,7 @@ class NotificationService {
 
   Future<void> showMessage({required String chatId, required String title, required String body}) async {
     if (!_ready) return;
-    if (appInForeground && openChatId == chatId) return;
+    if (isViewing(chatId)) return;
     await _plugin.show(
       id: chatId.hashCode & 0x7fffffff,
       title: title,

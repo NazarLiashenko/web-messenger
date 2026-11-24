@@ -51,7 +51,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(),
-      body: u == null
+      body: ReadableWidth(child: u == null
           ? (_error != null ? ErrorRetry(message: _error!, onRetry: _load) : const Center(child: CircularProgressIndicator()))
           : ListView(padding: const EdgeInsets.all(24), children: [
               Center(child: UserAvatar(user: u, radius: 64)),
@@ -72,7 +72,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   subtitle: Text(u.about.isEmpty ? 'Nothing here yet' : u.about),
                 ),
               ),
-            ]),
+            ])),
     );
   }
 }

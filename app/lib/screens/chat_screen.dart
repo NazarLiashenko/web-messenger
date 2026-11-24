@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:record/record.dart';
 
 import '../core/api_client.dart';
+import '../core/chat_navigation.dart';
 import '../core/format.dart';
 import '../core/media_picker.dart';
 import '../core/notification_service.dart';
@@ -22,8 +23,11 @@ import '../widgets/message_bubble.dart';
 import 'user_profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.chatId});
+  const ChatScreen({super.key, required this.chatId, this.embedded = false});
   final String chatId;
+
+  /// Shown as a pane next to the chat list (wide layout) instead of a full-screen page.
+  final bool embedded;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -52,11 +56,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       chatId: widget.chatId,
       myId: context.read<AuthController>().user!.id,
     )..load();
-    _notifications.openChatId = widget.chatId;
+    _notifications.openChatIds.add(widget.chatId);
+    _focus.onKeyEvent = _onComposerKey;
     _scroll.addListener(() {
       if (_scroll.position.pixels > _scroll.position.maxScrollExtent - 400) _room.loadMore();
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.embedded) _focus.requestFocus(); // keyboard users can type right away
       _chats.markLocallyRead(widget.chatId);
       if (_chats.byId(widget.chatId) == null) _fetchChat();
     });
@@ -79,13 +85,34 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    if (_notifications.openChatId == widget.chatId) _notifications.openChatId = null;
+    _notifications.openChatIds.remove(widget.chatId);
     _room.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
   /* ---------------- actions ---------------- */
+
+  /// With a hardware keyboard (web / desktop): Enter sends, Shift+Enter inserts a new line,
+  /// Esc cancels editing. Phones keep the on-screen keyboard behaviour (Enter = new line).
+  static final bool _keyboardFirst =
+      kIsWeb ||
+      const {TargetPlatform.windows, TargetPlatform.macOS, TargetPlatform.linux}.contains(defaultTargetPlatform);
+
+  KeyEventResult _onComposerKey(FocusNode node, KeyEvent event) {
+    if (!_keyboardFirst || event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    if ((key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) &&
+        !HardwareKeyboard.instance.isShiftPressed) {
+      if (_input.text.trim().isNotEmpty) _send();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.escape && _editing != null) {
+      _cancelEdit();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
 
   Future<void> _send() async {
     final text = _input.text.trim();
@@ -146,43 +173,87 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  void _messageMenu(Message m, bool mine) {
+  /// Message actions: a context menu at the pointer (right click) or a bottom sheet (long press).
+  Future<void> _messageMenu(Message m, bool mine, {Offset? at}) async {
     final canEdit = mine && m.type == 'text' && m.id != null && !m.isPending;
     final canDelete = mine && m.id != null && !m.isPending;
+    final canCopy = m.text?.isNotEmpty ?? false;
+    if (at != null) {
+      if (!canCopy && !canEdit && !canDelete) return;
+      final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+      final choice = await showMenu<String>(
+        context: context,
+        position: RelativeRect.fromRect(at & const Size(1, 1), Offset.zero & overlay.size),
+        items: [
+          if (canCopy)
+            const PopupMenuItem(
+              value: 'copy',
+              child: ListTile(leading: Icon(Icons.copy), title: Text('Copy text')),
+            ),
+          if (canEdit)
+            const PopupMenuItem(
+              value: 'edit',
+              child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Edit')),
+            ),
+          if (canDelete)
+            PopupMenuItem(
+              value: 'delete',
+              child: ListTile(
+                leading: Icon(Icons.delete_outline, color: Theme.of(context).colorScheme.error),
+                title: Text('Delete', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              ),
+            ),
+        ],
+      );
+      if (!mounted) return;
+      switch (choice) {
+        case 'copy':
+          await Clipboard.setData(ClipboardData(text: m.text!));
+          if (mounted) showMessage(context, 'Copied', error: false);
+        case 'edit':
+          _startEdit(m);
+        case 'delete':
+          _delete(m);
+      }
+      return;
+    }
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
       builder: (sheet) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (m.text?.isNotEmpty ?? false)
-            ListTile(
-              leading: const Icon(Icons.copy),
-              title: const Text('Copy text'),
-              onTap: () {
-                Clipboard.setData(ClipboardData(text: m.text!));
-                Navigator.pop(sheet);
-                showMessage(context, 'Copied', error: false);
-              },
-            ),
-          if (canEdit)
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Edit'),
-              onTap: () {
-                Navigator.pop(sheet);
-                _startEdit(m);
-              },
-            ),
-          if (canDelete)
-            ListTile(
-              leading: Icon(Icons.delete_outline, color: Theme.of(sheet).colorScheme.error),
-              title: Text('Delete', style: TextStyle(color: Theme.of(sheet).colorScheme.error)),
-              onTap: () {
-                Navigator.pop(sheet);
-                _delete(m);
-              },
-            ),
-        ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (canCopy)
+              ListTile(
+                leading: const Icon(Icons.copy),
+                title: const Text('Copy text'),
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: m.text!));
+                  Navigator.pop(sheet);
+                  showMessage(context, 'Copied', error: false);
+                },
+              ),
+            if (canEdit)
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Edit'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _startEdit(m);
+                },
+              ),
+            if (canDelete)
+              ListTile(
+                leading: Icon(Icons.delete_outline, color: Theme.of(sheet).colorScheme.error),
+                title: Text('Delete', style: TextStyle(color: Theme.of(sheet).colorScheme.error)),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _delete(m);
+                },
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -192,25 +263,28 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       context: context,
       showDragHandle: true,
       builder: (sheet) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (m.error != null) Padding(padding: const EdgeInsets.all(16), child: Text(m.error!)),
-          ListTile(
-            leading: const Icon(Icons.refresh),
-            title: const Text('Retry'),
-            onTap: () {
-              Navigator.pop(sheet);
-              _room.retry(m);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.delete_outline),
-            title: const Text('Remove'),
-            onTap: () {
-              Navigator.pop(sheet);
-              _room.discardFailed(m);
-            },
-          ),
-        ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (m.error != null) Padding(padding: const EdgeInsets.all(16), child: Text(m.error!)),
+            ListTile(
+              leading: const Icon(Icons.refresh),
+              title: const Text('Retry'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _room.retry(m);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Remove'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _room.discardFailed(m);
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -220,15 +294,34 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       context: context,
       showDragHandle: true,
       builder: (sheet) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ListTile(leading: const Icon(Icons.photo_outlined), title: const Text('Photo from gallery'), onTap: () => Navigator.pop(sheet, 'image')),
-          if (!kIsWeb)
-            ListTile(leading: const Icon(Icons.photo_camera_outlined), title: const Text('Take a photo'), onTap: () => Navigator.pop(sheet, 'camera')),
-          ListTile(leading: const Icon(Icons.video_library_outlined), title: const Text('Video from gallery'), onTap: () => Navigator.pop(sheet, 'video')),
-          if (!kIsWeb)
-            ListTile(leading: const Icon(Icons.videocam_outlined), title: const Text('Record a video'), onTap: () => Navigator.pop(sheet, 'record')),
-          const Padding(padding: EdgeInsets.fromLTRB(16, 4, 16, 12), child: Text('Images and videos up to 20 MB')),
-        ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_outlined),
+              title: const Text('Photo from gallery'),
+              onTap: () => Navigator.pop(sheet, 'image'),
+            ),
+            if (!kIsWeb)
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Take a photo'),
+                onTap: () => Navigator.pop(sheet, 'camera'),
+              ),
+            ListTile(
+              leading: const Icon(Icons.video_library_outlined),
+              title: const Text('Video from gallery'),
+              onTap: () => Navigator.pop(sheet, 'video'),
+            ),
+            if (!kIsWeb)
+              ListTile(
+                leading: const Icon(Icons.videocam_outlined),
+                title: const Text('Record a video'),
+                onTap: () => Navigator.pop(sheet, 'record'),
+              ),
+            const Padding(padding: EdgeInsets.fromLTRB(16, 4, 16, 12), child: Text('Images and videos up to 20 MB')),
+          ],
+        ),
       ),
     );
     if (choice == null) return;
@@ -264,30 +357,39 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     return Scaffold(
       appBar: AppBar(
-        titleSpacing: 0,
+        automaticallyImplyLeading: !widget.embedded,
+        titleSpacing: widget.embedded ? 16 : 0,
         title: chat == null
             ? const Text('Chat')
             : InkWell(
-                onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => UserProfileScreen(userId: chat.peer.id, initial: chat.peer))),
-                child: Row(children: [
-                  UserAvatar(user: chat.peer, radius: 20, showOnline: connected),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(chat.peer.username, overflow: TextOverflow.ellipsis),
-                      Text(
-                        !connected ? 'waiting for connection…' : (typing ? 'typing…' : formatLastSeen(chat.peer)),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: connected && (typing || chat.peer.online)
-                              ? theme.colorScheme.primary
-                              : theme.colorScheme.outline,
-                          fontStyle: typing ? FontStyle.italic : null,
-                        ),
-                      ),
-                    ]),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => UserProfileScreen(userId: chat.peer.id, initial: chat.peer),
                   ),
-                ]),
+                ),
+                child: Row(
+                  children: [
+                    UserAvatar(user: chat.peer, radius: 20, showOnline: connected),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(chat.peer.username, overflow: TextOverflow.ellipsis),
+                          Text(
+                            !connected ? 'waiting for connection…' : (typing ? 'typing…' : formatLastSeen(chat.peer)),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: connected && (typing || chat.peer.online)
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.outline,
+                              fontStyle: typing ? FontStyle.italic : null,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
         actions: [
           if (chat != null)
@@ -297,7 +399,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   if (v == 'mute') await chats.update(chat.id, muted: !chat.muted);
                   if (v == 'archive') {
                     await chats.update(chat.id, archived: !chat.archived);
-                    if (context.mounted) showMessage(context, chat.archived ? 'Chat archived' : 'Chat unarchived', error: false);
+                    if (context.mounted) {
+                      showMessage(context, chat.archived ? 'Chat archived' : 'Chat unarchived', error: false);
+                    }
                   }
                 } catch (e) {
                   if (context.mounted) showMessage(context, e);
@@ -308,58 +412,73 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 PopupMenuItem(value: 'archive', child: Text(chat.archived ? 'Unarchive chat' : 'Archive chat')),
               ],
             ),
+          if (widget.embedded)
+            IconButton(
+              tooltip: 'Close chat',
+              icon: const Icon(Icons.close),
+              onPressed: () => ChatNavigation.close(widget.chatId),
+            ),
         ],
       ),
-      body: Column(children: [
-        ConnectionBanner(connected: connected),
-        Expanded(
-          child: ListenableBuilder(
-            listenable: _room,
-            builder: (context, _) => _messageList(context),
+      body: Column(
+        children: [
+          ConnectionBanner(connected: connected),
+          Expanded(
+            child: ListenableBuilder(listenable: _room, builder: (context, _) => _messageList(context)),
           ),
-        ),
-        if (_compressing)
-          Container(
-            color: theme.colorScheme.surfaceContainerHigh,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: const Row(children: [
-              SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-              SizedBox(width: 12),
-              Text('Compressing video…'),
-            ]),
+          if (_compressing)
+            Container(
+              color: theme.colorScheme.surfaceContainerHigh,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: const Row(
+                children: [
+                  SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                  SizedBox(width: 12),
+                  Text('Compressing video…'),
+                ],
+              ),
+            ),
+          if (_editing != null) _editBanner(theme),
+          _Composer(
+            controller: _input,
+            focusNode: _focus,
+            editing: _editing != null,
+            onChanged: (v) {
+              setState(() {});
+              if (_editing == null) _room.onComposerChanged(v);
+            },
+            onSend: _send,
+            onAttach: _attach,
+            onVoice: (file, durationMs) => _room.sendMedia('audio', file, meta: {'durationMs': durationMs}),
           ),
-        if (_editing != null) _editBanner(theme),
-        _Composer(
-          controller: _input,
-          focusNode: _focus,
-          editing: _editing != null,
-          onChanged: (v) {
-            setState(() {});
-            if (_editing == null) _room.onComposerChanged(v);
-          },
-          onSend: _send,
-          onAttach: _attach,
-          onVoice: (file, durationMs) => _room.sendMedia('audio', file, meta: {'durationMs': durationMs}),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
   Widget _editBanner(ThemeData theme) => Container(
-        color: theme.colorScheme.surfaceContainerHigh,
-        padding: const EdgeInsets.fromLTRB(16, 6, 4, 6),
-        child: Row(children: [
-          Icon(Icons.edit, color: theme.colorScheme.primary, size: 20),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Edit message', style: TextStyle(color: theme.colorScheme.primary, fontWeight: FontWeight.w600)),
+    color: theme.colorScheme.surfaceContainerHigh,
+    padding: const EdgeInsets.fromLTRB(16, 6, 4, 6),
+    child: Row(
+      children: [
+        Icon(Icons.edit, color: theme.colorScheme.primary, size: 20),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Edit message',
+                style: TextStyle(color: theme.colorScheme.primary, fontWeight: FontWeight.w600),
+              ),
               Text(_editing!.text ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
-            ]),
+            ],
           ),
-          IconButton(onPressed: _cancelEdit, icon: const Icon(Icons.close)),
-        ]),
-      );
+        ),
+        IconButton(onPressed: _cancelEdit, icon: const Icon(Icons.close)),
+      ],
+    ),
+  );
 
   Widget _messageList(BuildContext context) {
     final msgs = _room.messages;
@@ -368,11 +487,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (_room.error != null && msgs.isEmpty) return ErrorRetry(message: _room.error!.message, onRetry: _room.load);
     if (msgs.isEmpty) {
       return Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('👋', style: TextStyle(fontSize: 48)),
-          const SizedBox(height: 8),
-          Text('No messages yet. Say hi!', style: Theme.of(context).textTheme.bodyLarge),
-        ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('👋', style: TextStyle(fontSize: 48)),
+            const SizedBox(height: 8),
+            Text('No messages yet. Say hi!', style: Theme.of(context).textTheme.bodyLarge),
+          ],
+        ),
       );
     }
     return ListView.builder(
@@ -382,23 +504,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       itemCount: msgs.length + (_room.loadingMore ? 1 : 0),
       itemBuilder: (context, i) {
         if (i == msgs.length) {
-          return const Padding(padding: EdgeInsets.all(12), child: Center(child: CircularProgressIndicator()));
+          return const Padding(
+            padding: EdgeInsets.all(12),
+            child: Center(child: CircularProgressIndicator()),
+          );
         }
         final index = msgs.length - 1 - i;
         final m = msgs[index];
         final prev = index > 0 ? msgs[index - 1] : null;
         final newDay = prev == null || !DateUtils.isSameDay(prev.createdAt, m.createdAt);
         final mine = m.senderId == me;
-        return Column(children: [
-          if (newDay) _DayChip(date: m.createdAt),
-          MessageBubble(
-            key: ValueKey(m.clientId),
-            message: m,
-            mine: mine,
-            onLongPress: () => _messageMenu(m, mine),
-            onTapFailed: () => _failedMenu(m),
-          ),
-        ]);
+        return Column(
+          children: [
+            if (newDay) _DayChip(date: m.createdAt),
+            MessageBubble(
+              key: ValueKey(m.clientId),
+              message: m,
+              mine: mine,
+              onLongPress: () => _messageMenu(m, mine),
+              onSecondaryTap: (pos) => _messageMenu(m, mine, at: pos),
+              onTapFailed: () => _failedMenu(m),
+            ),
+          ],
+        );
       },
     );
   }
@@ -409,13 +537,13 @@ class _DayChip extends StatelessWidget {
   final DateTime date;
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Chip(
-          label: Text(formatDayHeader(date), style: Theme.of(context).textTheme.labelSmall),
-          visualDensity: VisualDensity.compact,
-          side: BorderSide.none,
-        ),
-      );
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    child: Chip(
+      label: Text(formatDayHeader(date), style: Theme.of(context).textTheme.labelSmall),
+      visualDensity: VisualDensity.compact,
+      side: BorderSide.none,
+    ),
+  );
 }
 
 /* ============================== COMPOSER ============================== */
@@ -524,24 +652,26 @@ class _ComposerState extends State<_Composer> {
         top: false,
         child: Container(
           padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-          child: Row(children: [
-            IconButton(
-              tooltip: 'Cancel',
-              icon: Icon(Icons.delete_outline, color: theme.colorScheme.error),
-              onPressed: () => _stopRecording(send: false),
-            ),
-            const SizedBox(width: 8),
-            const _BlinkingDot(),
-            const SizedBox(width: 8),
-            Text(formatDuration(_stopwatch.elapsedMilliseconds), style: theme.textTheme.titleMedium),
-            const SizedBox(width: 12),
-            const Expanded(child: Text('Recording…')),
-            IconButton.filled(
-              tooltip: 'Send voice message',
-              icon: const Icon(Icons.send),
-              onPressed: () => _stopRecording(send: true),
-            ),
-          ]),
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: 'Cancel',
+                icon: Icon(Icons.delete_outline, color: theme.colorScheme.error),
+                onPressed: () => _stopRecording(send: false),
+              ),
+              const SizedBox(width: 8),
+              const _BlinkingDot(),
+              const SizedBox(width: 8),
+              Text(formatDuration(_stopwatch.elapsedMilliseconds), style: theme.textTheme.titleMedium),
+              const SizedBox(width: 12),
+              const Expanded(child: Text('Recording…')),
+              IconButton.filled(
+                tooltip: 'Send voice message',
+                icon: const Icon(Icons.send),
+                onPressed: () => _stopRecording(send: true),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -550,44 +680,51 @@ class _ComposerState extends State<_Composer> {
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(4, 4, 8, 6),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          if (!widget.editing)
-            IconButton(tooltip: 'Attach photo or video', icon: const Icon(Icons.attach_file), onPressed: widget.onAttach),
-          if (widget.editing) const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: widget.controller,
-              focusNode: widget.focusNode,
-              minLines: 1,
-              maxLines: 6,
-              maxLength: 4000,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: InputDecoration(
-                hintText: 'Message',
-                counterText: '',
-                isDense: true,
-                filled: true,
-                fillColor: theme.colorScheme.surfaceContainerHighest,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (!widget.editing)
+              IconButton(
+                tooltip: 'Attach photo or video',
+                icon: const Icon(Icons.attach_file),
+                onPressed: widget.onAttach,
               ),
-              onChanged: widget.onChanged,
+            if (widget.editing) const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: widget.controller,
+                focusNode: widget.focusNode,
+                minLines: 1,
+                maxLines: 6,
+                maxLength: 4000,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: InputDecoration(
+                  hintText: 'Message',
+                  counterText: '',
+                  isDense: true,
+                  filled: true,
+                  fillColor: theme.colorScheme.surfaceContainerHighest,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+                ),
+                onChanged: widget.onChanged,
+              ),
             ),
-          ),
-          const SizedBox(width: 6),
-          if (hasText || widget.editing)
-            IconButton.filled(
-              tooltip: widget.editing ? 'Save' : 'Send',
-              icon: Icon(widget.editing ? Icons.check : Icons.send),
-              onPressed: hasText ? widget.onSend : null,
-            )
-          else
-            IconButton.filledTonal(
-              tooltip: 'Record voice message',
-              icon: const Icon(Icons.mic),
-              onPressed: _startRecording,
-            ),
-        ]),
+            const SizedBox(width: 6),
+            if (hasText || widget.editing)
+              IconButton.filled(
+                tooltip: widget.editing ? 'Save' : 'Send',
+                icon: Icon(widget.editing ? Icons.check : Icons.send),
+                onPressed: hasText ? widget.onSend : null,
+              )
+            else
+              IconButton.filledTonal(
+                tooltip: 'Record voice message',
+                icon: const Icon(Icons.mic),
+                onPressed: _startRecording,
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -609,7 +746,11 @@ class _BlinkingDotState extends State<_BlinkingDot> with SingleTickerProviderSta
 
   @override
   Widget build(BuildContext context) => FadeTransition(
-        opacity: _c,
-        child: Container(width: 12, height: 12, decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle)),
-      );
+    opacity: _c,
+    child: Container(
+      width: 12,
+      height: 12,
+      decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+    ),
+  );
 }

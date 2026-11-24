@@ -7,7 +7,7 @@ import '../core/api_client.dart';
 import '../models/models.dart';
 import '../state/invites_controller.dart';
 import '../widgets/common.dart';
-import 'chat_screen.dart';
+import '../core/chat_navigation.dart';
 import 'user_profile_screen.dart';
 
 /// Find users by username (prefix) or exact email.
@@ -71,7 +71,7 @@ class _SearchScreenState extends State<SearchScreen> {
         ),
         bottom: _loading ? const PreferredSize(preferredSize: Size.fromHeight(2), child: LinearProgressIndicator(minHeight: 2)) : null,
       ),
-      body: _error != null
+      body: ReadableWidth(child: _error != null
           ? ErrorRetry(message: _error!, onRetry: _search)
           : _results.isEmpty
               ? Center(
@@ -97,7 +97,7 @@ class _SearchScreenState extends State<SearchScreen> {
                         _search();
                       },
                     ),
-                ]),
+                ])),
     );
   }
 }
@@ -130,7 +130,7 @@ class RelationButton extends StatelessWidget {
       onChanged?.call();
     }
 
-    void openChat(String chatId) => nav.push(MaterialPageRoute(builder: (_) => ChatScreen(chatId: chatId)));
+    void openChat(String chatId) => ChatNavigation.open(nav.context, chatId);
 
     Widget btn(Widget b) => expanded ? SizedBox(width: double.infinity, child: b) : b;
 

@@ -29,6 +29,19 @@ void showMessage(BuildContext context, Object messageOrError, {bool error = true
     ));
 }
 
+/// Keeps page content at a readable width on wide (web / desktop) windows; no effect on phones.
+class ReadableWidth extends StatelessWidget {
+  const ReadableWidth({super.key, required this.child, this.maxWidth = 720});
+  final Widget child;
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) => Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth), child: child),
+      );
+}
+
 /// Profile picture with a default image when the user has none, plus an optional online dot.
 class UserAvatar extends StatelessWidget {
   const UserAvatar({super.key, required this.user, this.radius = 24, this.showOnline = false});

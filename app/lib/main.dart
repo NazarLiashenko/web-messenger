@@ -5,12 +5,12 @@ import 'package:provider/provider.dart';
 
 import 'core/api_client.dart';
 import 'core/app_config.dart';
+import 'core/chat_navigation.dart';
 import 'core/notification_service.dart';
 import 'core/push_service.dart';
 import 'core/session_store.dart';
 import 'core/socket_service.dart';
 import 'screens/auth_screens.dart';
-import 'screens/chat_screen.dart';
 import 'screens/home_screen.dart';
 import 'state/auth_controller.dart';
 import 'state/chats_controller.dart';
@@ -44,6 +44,7 @@ Future<void> main() async {
     currentUser = id;
     chats.reset(id);
     invites.reset();
+    ChatNavigation.selected.value = null;
     if (id == null) navigatorKey.currentState?.popUntil((r) => r.isFirst);
   });
 
@@ -104,7 +105,7 @@ class _MessengerAppState extends State<MessengerApp> with WidgetsBindingObserver
       final chatId = payload.substring(5);
       nav.popUntil((r) => r.isFirst);
       HomeScreen.tabNotifier.value = 0;
-      nav.push(MaterialPageRoute(builder: (_) => ChatScreen(chatId: chatId)));
+      ChatNavigation.open(nav.context, chatId);
     } else if (payload == 'invites') {
       nav.popUntil((r) => r.isFirst);
       HomeScreen.tabNotifier.value = 1;
