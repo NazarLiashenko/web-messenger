@@ -41,24 +41,14 @@ class InvitesScreen extends StatelessWidget {
                     const Center(child: Text('No pending invitations')),
                   ])
                 : ListView(children: [
-                    if (ctrl.incoming.isNotEmpty) const _Header('Received'),
+                    if (ctrl.incoming.isNotEmpty) const SectionHeader('Received'),
                     for (final i in ctrl.incoming) _InviteTile(invite: i),
-                    if (ctrl.outgoing.isNotEmpty) const _Header('Sent'),
+                    if (ctrl.outgoing.isNotEmpty) const SectionHeader('Sent'),
                     for (final i in ctrl.outgoing) _InviteTile(invite: i),
                   ]),
       ),
     );
   }
-}
-
-class _Header extends StatelessWidget {
-  const _Header(this.text);
-  final String text;
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-        child: Text(text, style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Theme.of(context).colorScheme.primary)),
-      );
 }
 
 class _InviteTile extends StatefulWidget {
@@ -86,10 +76,16 @@ class _InviteTileState extends State<_InviteTile> {
   Widget build(BuildContext context) {
     final ctrl = context.read<InvitesController>();
     final i = widget.invite;
+    final group = i.group;
+    final when = formatChatTime(i.createdAt);
     return ListTile(
-      leading: UserAvatar(user: i.user, showOnline: true),
-      title: Text(i.user.username),
-      subtitle: Text(i.incoming ? 'wants to chat · ${formatChatTime(i.createdAt)}' : 'invited ${formatChatTime(i.createdAt)}'),
+      leading: group != null ? GroupAvatar(title: group.title) : UserAvatar(user: i.user, showOnline: true),
+      title: Text(group != null ? group.title : i.user.username),
+      subtitle: Text(group != null
+          ? (i.incoming
+              ? '${i.user.username} invited you to the group · ${group.memberCount} ${group.memberCount == 1 ? 'member' : 'members'} · $when'
+              : 'you invited ${i.user.username} · $when')
+          : (i.incoming ? 'wants to chat · $when' : 'invited $when')),
       onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => UserProfileScreen(userId: i.user.id, initial: i.user))),
       trailing: _busy
           ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
@@ -103,7 +99,8 @@ class _InviteTileState extends State<_InviteTile> {
                   const SizedBox(width: 8),
                   IconButton.filled(
                     tooltip: 'Accept',
-                    icon: const Icon(Icons.check),
+                    // ListTile's icon colour would otherwise paint the check in the button's own colour.
+                    icon: Icon(Icons.check, color: Theme.of(context).colorScheme.onPrimary),
                     onPressed: () => _run(() async {
                       // The tile may be removed by the realtime event before the request returns,
                       // so grab the navigator first.

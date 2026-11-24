@@ -72,10 +72,10 @@ socket.on('connect', () => {
 socket.on('invite:new', async (inv) => {
   if (inv.direction !== 'incoming') return;
   await api('POST', `/api/invites/${inv.id}/accept`, { token });
-  console.log(`[peer] accepted invite from ${inv.user.username}`);
+  console.log(`[peer] accepted ${inv.group ? `invite to group "${inv.group.title}"` : 'invite'} from ${inv.user.username}`);
 });
 socket.on('message:new', async ({ message }) => {
-  if (message.senderId === user.id) return;
+  if (message.senderId === user.id || message.type === 'system') return;
   socket.emit('message:delivered', { messageIds: [message.id] });
   console.log(`[peer] got ${message.type}: ${message.text ?? ''}`);
   await new Promise((r) => setTimeout(r, 1500));

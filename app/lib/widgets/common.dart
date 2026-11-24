@@ -89,6 +89,51 @@ class UserAvatar extends StatelessWidget {
   }
 }
 
+/// Group picture: the group's initials on a colour derived from its name.
+class GroupAvatar extends StatelessWidget {
+  const GroupAvatar({super.key, required this.title, this.radius = 24});
+  final String title;
+  final double radius;
+
+  static const _palette = [
+    Color(0xFF5C6BC0), Color(0xFF26A69A), Color(0xFFEF6C00), Color(0xFF8E24AA),
+    Color(0xFF00897B), Color(0xFFD81B60), Color(0xFF3949AB), Color(0xFF6D4C41),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final words = title.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final initials = words.isEmpty
+        ? ''
+        : (words.length == 1
+                ? words.first.characters.take(2).toString()
+                : '${words[0].characters.first}${words[1].characters.first}')
+            .toUpperCase();
+    final color = _palette[title.codeUnits.fold<int>(0, (a, b) => a + b) % _palette.length];
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: color,
+      foregroundColor: Colors.white,
+      child: initials.isEmpty
+          ? Icon(Icons.group, size: radius)
+          : Text(initials, style: TextStyle(fontSize: radius * 0.75, fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+/// Avatar of a chat: the other person for 1:1 chats, the group picture for groups.
+class ChatAvatar extends StatelessWidget {
+  const ChatAvatar({super.key, required this.chat, this.radius = 24, this.showOnline = false});
+  final Chat chat;
+  final double radius;
+  final bool showOnline;
+
+  @override
+  Widget build(BuildContext context) => chat.isGroup
+      ? GroupAvatar(title: chat.name, radius: radius)
+      : UserAvatar(user: chat.peer, radius: radius, showOnline: showOnline);
+}
+
 /// The default profile image shown until the user uploads their own.
 class DefaultAvatar extends StatelessWidget {
   const DefaultAvatar({super.key, required this.radius});
@@ -213,4 +258,16 @@ class _BusyButtonState extends State<BusyButton> {
         ? FilledButton.tonal(onPressed: onPressed, child: child)
         : FilledButton(onPressed: onPressed, child: child);
   }
+}
+
+/// Small coloured heading above a group of list items.
+class SectionHeader extends StatelessWidget {
+  const SectionHeader(this.text, {super.key});
+  final String text;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+        child: Text(text,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Theme.of(context).colorScheme.primary)),
+      );
 }

@@ -54,13 +54,27 @@ class InvitesController extends ChangeNotifier {
     if (data['chat'] is Map) {
       final chat = Chat.fromJson(Map<String, dynamic>.from(data['chat'] as Map));
       chats.upsert(chat);
-      incoming.removeWhere((i) => i.user.id == userId);
+      incoming.removeWhere((i) => !i.isGroup && i.user.id == userId);
       notifyListeners();
       return chat;
     }
     final invite = Invite.fromJson(Map<String, dynamic>.from(data['invite'] as Map));
     _add(invite);
     return null;
+  }
+
+  /// Invites someone into a group (any member can).
+  Future<Invite> inviteToGroup(String groupId, String userId) async {
+    final data = await api.post('/api/groups/$groupId/invites', {'userId': userId});
+    final invite = Invite.fromJson(Map<String, dynamic>.from(data['invite'] as Map));
+    _add(invite);
+    return invite;
+  }
+
+  /// Pending invitations into a group (shown on the group info page).
+  Future<List<Invite>> groupInvites(String groupId) async {
+    final data = await api.get('/api/groups/$groupId');
+    return (data['invites'] as List).map((j) => Invite.fromJson(Map<String, dynamic>.from(j as Map))).toList();
   }
 
   Future<Chat> accept(Invite invite) async {
@@ -108,7 +122,12 @@ class InvitesController extends ChangeNotifier {
       final invite = Invite.fromJson(data);
       _add(invite);
       if (invite.incoming) {
-        notifications.showInvite(title: 'New chat invitation', body: '${invite.user.username} wants to chat with you');
+        notifications.showInvite(
+          title: invite.isGroup ? 'New group invitation' : 'New chat invitation',
+          body: invite.isGroup
+              ? '${invite.user.username} invited you to "${invite.group!.title}"'
+              : '${invite.user.username} wants to chat with you',
+        );
       }
     } else if (e.name == 'invite:updated') {
       final invite = Invite.fromJson(data);

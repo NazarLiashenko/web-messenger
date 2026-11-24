@@ -20,6 +20,7 @@ import '../state/chat_room_controller.dart';
 import '../state/chats_controller.dart';
 import '../widgets/common.dart';
 import '../widgets/message_bubble.dart';
+import 'group_screens.dart';
 import 'user_profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -89,6 +90,27 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _room.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  bool _closing = false;
+
+  /// We left / were removed from this group while it was open: close it and say why.
+  void _onRemoved() {
+    if (_closing) return;
+    _closing = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      if (widget.embedded) {
+        ChatNavigation.close(widget.chatId);
+      } else {
+        Navigator.of(context).popUntil((r) => r.isFirst);
+      }
+      messenger.showSnackBar(const SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text('You are no longer a member of this group'),
+      ));
+    });
   }
 
   /* ---------------- actions ---------------- */
@@ -353,7 +375,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final chat = chats.byId(widget.chatId);
     final connected = context.watch<SocketService>().connected;
     final theme = Theme.of(context);
-    final typing = chats.isTyping(widget.chatId);
+    if (chats.removedChatIds.contains(widget.chatId)) _onRemoved();
+    final typing = chats.typingLabel(widget.chatId);
+    final online = chat?.peer?.online ?? false;
+    final String status;
+    if (!connected) {
+      status = 'waiting for connection…';
+    } else if (typing != null) {
+      status = typing;
+    } else if (chat == null) {
+      status = '';
+    } else if (chat.isGroup) {
+      final n = chat.members.length;
+      final on = chat.members.where((m) => m.online && m.id != _room.myId).length;
+      status = '$n ${n == 1 ? 'member' : 'members'}${on > 0 ? ', $on online' : ''}';
+    } else {
+      status = formatLastSeen(chat.peer!);
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -364,25 +402,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             : InkWell(
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => UserProfileScreen(userId: chat.peer.id, initial: chat.peer),
+                    builder: (_) => chat.isGroup
+                        ? GroupInfoScreen(chatId: chat.id)
+                        : UserProfileScreen(userId: chat.peer!.id, initial: chat.peer),
                   ),
                 ),
                 child: Row(
                   children: [
-                    UserAvatar(user: chat.peer, radius: 20, showOnline: connected),
+                    ChatAvatar(chat: chat, radius: 20, showOnline: connected),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(chat.peer.username, overflow: TextOverflow.ellipsis),
+                          Text(chat.name, overflow: TextOverflow.ellipsis),
                           Text(
-                            !connected ? 'waiting for connection…' : (typing ? 'typing…' : formatLastSeen(chat.peer)),
+                            status,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: connected && (typing || chat.peer.online)
+                              color: connected && (typing != null || online)
                                   ? theme.colorScheme.primary
                                   : theme.colorScheme.outline,
-                              fontStyle: typing ? FontStyle.italic : null,
+                              fontStyle: typing != null ? FontStyle.italic : null,
                             ),
                           ),
                         ],
@@ -395,6 +437,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           if (chat != null)
             PopupMenuButton<String>(
               onSelected: (v) async {
+                if (v == 'info') {
+                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => GroupInfoScreen(chatId: chat.id)));
+                  return;
+                }
                 try {
                   if (v == 'mute') await chats.update(chat.id, muted: !chat.muted);
                   if (v == 'archive') {
@@ -408,6 +454,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 }
               },
               itemBuilder: (_) => [
+                if (chat.isGroup) const PopupMenuItem(value: 'info', child: Text('Group info')),
                 PopupMenuItem(value: 'mute', child: Text(chat.muted ? 'Unmute notifications' : 'Mute notifications')),
                 PopupMenuItem(value: 'archive', child: Text(chat.archived ? 'Unarchive chat' : 'Archive chat')),
               ],
@@ -480,9 +527,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     ),
   );
 
+  static const _nameColors = [
+    Color(0xFFE53935), Color(0xFF8E24AA), Color(0xFF3949AB), Color(0xFF00897B),
+    Color(0xFFF4511E), Color(0xFF6D4C41), Color(0xFF1E88E5), Color(0xFF43A047),
+  ];
+  Color _nameColor(String userId) => _nameColors[userId.codeUnits.fold<int>(0, (a, b) => a + b) % _nameColors.length];
+
   Widget _messageList(BuildContext context) {
     final msgs = _room.messages;
     final me = _room.myId;
+    final chat = context.read<ChatsController>().byId(widget.chatId);
+    // Names of people who left the group, known from group events in the history.
+    final formerNames = <String, String>{};
+    if (chat?.isGroup ?? false) {
+      for (final m in msgs.where((m) => m.isSystem)) {
+        for (final (idKey, nameKey) in const [('actorId', 'actorName'), ('targetId', 'targetName'), ('invitedById', 'invitedByName')]) {
+          final id = m.meta[idKey], name = m.meta[nameKey];
+          if (id is String && name is String) formerNames[id] = name;
+        }
+      }
+    }
     if (_room.loading && msgs.isEmpty) return const Center(child: CircularProgressIndicator());
     if (_room.error != null && msgs.isEmpty) return ErrorRetry(message: _room.error!.message, onRetry: _room.load);
     if (msgs.isEmpty) {
@@ -514,10 +578,24 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final prev = index > 0 ? msgs[index - 1] : null;
         final newDay = prev == null || !DateUtils.isSameDay(prev.createdAt, m.createdAt);
         final mine = m.senderId == me;
+        if (m.isSystem) {
+          return Column(children: [
+            if (newDay) _DayChip(date: m.createdAt),
+            _SystemChip(text: systemMessageText(m, myId: me)),
+          ]);
+        }
+        // Groups: name above the first message of a run from the same person.
+        final showSender = chat != null &&
+            chat.isGroup &&
+            !mine &&
+            (newDay || prev.isSystem || prev.senderId != m.senderId);
+        final sender = showSender ? chat.member(m.senderId) : null;
         return Column(
           children: [
             if (newDay) _DayChip(date: m.createdAt),
             MessageBubble(
+              senderName: showSender ? (sender?.username ?? formerNames[m.senderId] ?? 'Former member') : null,
+              senderColor: showSender ? _nameColor(m.senderId ?? '') : null,
               key: ValueKey(m.clientId),
               message: m,
               mine: mine,
@@ -528,6 +606,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ],
         );
       },
+    );
+  }
+}
+
+/// Group event ("Bob joined the group") in the middle of the history.
+class _SystemChip extends StatelessWidget {
+  const _SystemChip({required this.text});
+  final String text;
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(text, textAlign: TextAlign.center, style: theme.textTheme.bodySmall),
+        ),
+      ),
     );
   }
 }

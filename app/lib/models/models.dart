@@ -23,6 +23,7 @@ class AppUser {
     this.chatId,
     this.invite,
     this.createdAt,
+    this.role,
   });
 
   final String id;
@@ -38,6 +39,10 @@ class AppUser {
   final InviteRef? invite;
   final DateTime? createdAt;
 
+  /// Role inside a group (`owner` | `member`), only for group member lists.
+  final String? role;
+  bool get isOwner => role == 'owner';
+
   factory AppUser.fromJson(Map<String, dynamic> j) => AppUser(
         id: j['id'] as String,
         username: j['username'] as String? ?? '',
@@ -51,6 +56,7 @@ class AppUser {
         chatId: j['chatId'] as String?,
         invite: j['invite'] is Map ? InviteRef(j['invite']['id'] as String, j['invite']['direction'] as String) : null,
         createdAt: _date(j['createdAt']),
+        role: j['role'] as String?,
       );
 
   AppUser copyWith({bool? online, DateTime? lastSeenAt, String? chatId, InviteRef? invite, bool clearInvite = false}) =>
@@ -67,6 +73,19 @@ class AppUser {
         chatId: chatId ?? this.chatId,
         invite: clearInvite ? null : (invite ?? this.invite),
         createdAt: createdAt,
+        role: role,
+      );
+
+  /// Profile update (`user:updated`) keeping the group role.
+  AppUser withProfileOf(AppUser u) => AppUser(
+        id: id,
+        username: u.username,
+        about: u.about,
+        avatarUrl: u.avatarUrl,
+        online: u.online,
+        lastSeenAt: u.lastSeenAt,
+        createdAt: u.createdAt,
+        role: role,
       );
 }
 
@@ -130,7 +149,7 @@ class Message {
   final String clientId;
   final String chatId;
   final String? senderId;
-  final String type; // text | image | video | audio
+  final String type; // text | image | video | audio | system (group events)
   String? text;
   MediaInfo? media;
   Map<String, dynamic> meta;
@@ -144,6 +163,7 @@ class Message {
   bool retryOnReconnect = false; // failed because of the network: resend automatically
 
   bool get isDeleted => deletedAt != null;
+  bool get isSystem => type == 'system';
   bool get isPending => status == MessageStatus.sending || status == MessageStatus.failed;
   int? get durationMs => (meta['durationMs'] as num?)?.toInt();
 
@@ -171,7 +191,11 @@ class Message {
 class Chat {
   Chat({
     required this.id,
-    required this.peer,
+    this.kind = 'direct',
+    this.peer,
+    this.title,
+    this.members = const [],
+    this.myRole,
     this.archived = false,
     this.muted = false,
     this.unreadCount = 0,
@@ -180,16 +204,36 @@ class Chat {
   });
 
   final String id;
-  AppUser peer;
+  final String kind; // direct | group
+
+  /// The other person (direct chats only).
+  AppUser? peer;
+
+  /// Group name, members (with roles) and my role (groups only).
+  String? title;
+  List<AppUser> members;
+  String? myRole;
+
   bool archived;
   bool muted;
   int unreadCount;
   Message? lastMessage;
   DateTime lastActivityAt;
 
+  bool get isGroup => kind == 'group';
+  bool get iAmOwner => myRole == 'owner';
+  String get name => isGroup ? (title ?? 'Group') : (peer?.username ?? 'Chat');
+  AppUser? member(String? userId) => isGroup ? members.where((m) => m.id == userId).firstOrNull : (peer?.id == userId ? peer : null);
+
   factory Chat.fromJson(Map<String, dynamic> j) => Chat(
         id: j['id'] as String,
-        peer: AppUser.fromJson(Map<String, dynamic>.from(j['peer'] as Map)),
+        kind: j['kind'] as String? ?? 'direct',
+        peer: j['peer'] is Map ? AppUser.fromJson(Map<String, dynamic>.from(j['peer'] as Map)) : null,
+        title: j['title'] as String?,
+        members: j['members'] is List
+            ? (j['members'] as List).map((m) => AppUser.fromJson(Map<String, dynamic>.from(m as Map))).toList()
+            : const [],
+        myRole: j['myRole'] as String?,
         archived: j['archived'] as bool? ?? false,
         muted: j['muted'] as bool? ?? false,
         unreadCount: (j['unreadCount'] as num?)?.toInt() ?? 0,
@@ -198,8 +242,30 @@ class Chat {
       );
 }
 
+class GroupRef {
+  GroupRef({required this.id, required this.title, required this.memberCount});
+  final String id;
+  final String title;
+  final int memberCount;
+
+  factory GroupRef.fromJson(Map<String, dynamic> j) => GroupRef(
+        id: j['id'] as String,
+        title: j['title'] as String? ?? 'Group',
+        memberCount: (j['memberCount'] as num?)?.toInt() ?? 0,
+      );
+}
+
 class Invite {
-  Invite({required this.id, required this.direction, required this.status, required this.user, required this.createdAt});
+  Invite({
+    required this.id,
+    required this.direction,
+    required this.status,
+    required this.user,
+    required this.createdAt,
+    this.group,
+    this.from,
+    this.to,
+  });
 
   final String id;
   final String direction;
@@ -207,13 +273,25 @@ class Invite {
   final AppUser user; // the other person
   final DateTime createdAt;
 
-  bool get incoming => direction == 'incoming';
+  /// Set for invitations into a group chat.
+  final GroupRef? group;
+  final AppUser? from;
+  final AppUser? to;
 
-  factory Invite.fromJson(Map<String, dynamic> j) => Invite(
-        id: j['id'] as String,
-        direction: j['direction'] as String,
-        status: j['status'] as String,
-        user: AppUser.fromJson(Map<String, dynamic>.from(j['user'] as Map)),
-        createdAt: _date(j['createdAt']) ?? DateTime.now(),
-      );
+  bool get incoming => direction == 'incoming';
+  bool get isGroup => group != null;
+
+  factory Invite.fromJson(Map<String, dynamic> j) {
+    AppUser? u(String k) => j[k] is Map ? AppUser.fromJson(Map<String, dynamic>.from(j[k] as Map)) : null;
+    return Invite(
+      id: j['id'] as String,
+      direction: j['direction'] as String,
+      status: j['status'] as String,
+      user: u('user')!,
+      createdAt: _date(j['createdAt']) ?? DateTime.now(),
+      group: j['group'] is Map ? GroupRef.fromJson(Map<String, dynamic>.from(j['group'] as Map)) : null,
+      from: u('from'),
+      to: u('to'),
+    );
+  }
 }

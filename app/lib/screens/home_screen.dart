@@ -13,6 +13,7 @@ import '../state/invites_controller.dart';
 import '../widgets/common.dart';
 import '../widgets/message_bubble.dart';
 import 'chat_screen.dart';
+import 'group_screens.dart';
 import 'invites_screen.dart';
 import 'profile_screen.dart';
 import 'search_screen.dart';
@@ -240,6 +241,12 @@ class ChatListTab extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Chats'),
         actions: [
+          IconButton(
+            tooltip: 'New group',
+            icon: const Icon(Icons.group_add_outlined),
+            onPressed: () => Navigator.of(context, rootNavigator: true)
+                .push(MaterialPageRoute(builder: (_) => const CreateGroupScreen())),
+          ),
           IconButton(tooltip: 'Find people', icon: const Icon(Icons.search), onPressed: () => _openSearch(context)),
         ],
       ),
@@ -387,13 +394,21 @@ class ChatTile extends StatelessWidget {
     );
   }
 
+  /// Last message preview; in groups prefixed with the sender ("Bob: hi", "You: hi").
+  String _preview(Message last, String? me) {
+    final text = messagePreview(last, myId: me);
+    if (!chat.isGroup || last.isSystem || last.isDeleted) return text;
+    final who = last.senderId == me ? 'You' : (chat.member(last.senderId)?.username ?? 'Someone');
+    return '$who: $text';
+  }
+
   @override
   Widget build(BuildContext context) {
     final ctrl = context.watch<ChatsController>();
     final me = context.read<AuthController>().user?.id;
     final scheme = Theme.of(context).colorScheme;
     final last = chat.lastMessage;
-    final typing = ctrl.isTyping(chat.id);
+    final typing = ctrl.typingLabel(chat.id);
     final unread = chat.unreadCount > 0;
 
     return Dismissible(
@@ -424,12 +439,13 @@ class ChatTile extends StatelessWidget {
             selected: selectedId == chat.id && ChatNavigation.isWide(context),
             selectedTileColor: scheme.secondaryContainer.withValues(alpha: 0.6),
             selectedColor: scheme.onSecondaryContainer,
-            leading: UserAvatar(user: chat.peer, radius: 26, showOnline: context.watch<SocketService>().connected),
+            leading: ChatAvatar(
+              chat: chat, radius: 26, showOnline: context.watch<SocketService>().connected),
             title: Row(
               children: [
                 Flexible(
                   child: Text(
-                    chat.peer.username,
+                    chat.name,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
@@ -437,20 +453,22 @@ class ChatTile extends StatelessWidget {
                 if (chat.muted) ...[const SizedBox(width: 4), Icon(Icons.volume_off, size: 16, color: scheme.outline)],
               ],
             ),
-            subtitle: typing
+            subtitle: typing != null
                 ? Text(
-                    'typing…',
+                    typing,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: scheme.primary, fontStyle: FontStyle.italic),
                   )
                 : Row(
                     children: [
-                      if (last != null && last.senderId == me && !last.isDeleted) ...[
+                      if (last != null && last.senderId == me && !last.isDeleted && !last.isSystem) ...[
                         StatusIcon(status: last.status, size: 16),
                         const SizedBox(width: 4),
                       ],
                       Expanded(
                         child: Text(
-                          last == null ? 'Say hi 👋' : messagePreview(last),
+                          last == null ? 'Say hi 👋' : _preview(last, me),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(fontStyle: last?.isDeleted ?? false ? FontStyle.italic : null),

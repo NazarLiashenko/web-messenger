@@ -46,10 +46,30 @@ String formatBytes(int bytes) {
   return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
 }
 
-String messagePreview(Message m) {
+String messagePreview(Message m, {String? myId}) {
+  if (m.isSystem) return systemMessageText(m, myId: myId);
   if (m.isDeleted) return 'Message deleted';
   const labels = {'image': '📷 Photo', 'video': '🎬 Video', 'audio': '🎤 Voice message'};
   if (m.type == 'text') return m.text ?? '';
   final label = labels[m.type] ?? 'Attachment';
   return (m.text?.isNotEmpty ?? false) ? '$label · ${m.text}' : label;
+}
+
+/// Human-readable text of a group event ("Anna added Bob", "You left the group"…).
+String systemMessageText(Message m, {String? myId}) {
+  final meta = m.meta;
+  String who(String idKey, String nameKey) =>
+      meta[idKey] != null && meta[idKey] == myId ? 'You' : (meta[nameKey] as String? ?? 'Someone');
+  final actor = who('actorId', 'actorName');
+  final target = who('targetId', 'targetName');
+  return switch (meta['event']) {
+    'created' => '$actor created the group "${meta['title']}"',
+    'joined' => meta['invitedByName'] != null
+        ? '$actor joined the group (invited by ${meta['invitedById'] == myId ? 'you' : meta['invitedByName']})'
+        : '$actor joined the group',
+    'renamed' => '$actor renamed the group to "${meta['title']}"',
+    'left' => '$target left the group',
+    'removed' => '$actor removed $target',
+    _ => 'Group updated',
+  };
 }

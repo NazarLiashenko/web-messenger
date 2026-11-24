@@ -37,7 +37,13 @@ class MessageBubble extends StatelessWidget {
     this.onLongPress,
     this.onSecondaryTap,
     this.onTapFailed,
+    this.senderName,
+    this.senderColor,
   });
+
+  /// Author shown above the message (group chats).
+  final String? senderName;
+  final Color? senderColor;
 
   final Message message;
   final bool mine;
@@ -128,6 +134,16 @@ class MessageBubble extends StatelessWidget {
       child: Column(
         crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
+          if (senderName != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 20, right: 56, top: 6),
+              child: Text(
+                senderName!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: senderColor ?? scheme.primary),
+              ),
+            ),
           GestureDetector(
             onLongPress: m.isDeleted ? null : onLongPress,
             onSecondaryTapUp: m.isDeleted || onSecondaryTap == null ? null : (d) => onSecondaryTap!(d.globalPosition),

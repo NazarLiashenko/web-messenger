@@ -23,7 +23,11 @@ class ChatsController extends ChangeNotifier {
   late final Timer _typingTicker;
 
   final Map<String, Chat> _chats = {};
-  final Map<String, DateTime> _typingUntil = {};
+  /// chatId -> (userId -> typing until). Several people can type at once in a group.
+  final Map<String, Map<String, DateTime>> _typing = {};
+
+  /// Chats the user was removed from / left while they were open (the chat screen closes itself).
+  final Set<String> removedChatIds = {};
   bool loading = false;
   bool loaded = false;
   ApiException? error;
@@ -34,15 +38,34 @@ class ChatsController extends ChangeNotifier {
   List<Chat> get active => _sorted(false);
   List<Chat> get archived => _sorted(true);
   Chat? byId(String id) => _chats[id];
-  Chat? byPeer(String userId) => _chats.values.where((c) => c.peer.id == userId).firstOrNull;
-  bool isTyping(String chatId) => (_typingUntil[chatId]?.isAfter(DateTime.now())) ?? false;
+  Chat? byPeer(String userId) => _chats.values.where((c) => !c.isGroup && c.peer?.id == userId).firstOrNull;
+  bool isTyping(String chatId) => typingUserIds(chatId).isNotEmpty;
+
+  /// Who is typing in the chat right now.
+  List<String> typingUserIds(String chatId) {
+    final now = DateTime.now();
+    return [for (final e in (_typing[chatId] ?? const <String, DateTime>{}).entries) if (e.value.isAfter(now)) e.key];
+  }
+
+  /// "typing…" / "Bob is typing…" / "Bob and Ann are typing…"
+  String? typingLabel(String chatId) {
+    final ids = typingUserIds(chatId);
+    if (ids.isEmpty) return null;
+    final chat = _chats[chatId];
+    if (chat == null || !chat.isGroup) return 'typing…';
+    final names = ids.map((id) => chat.member(id)?.username ?? 'Someone').toList();
+    if (names.length == 1) return '${names.first} is typing…';
+    if (names.length == 2) return '${names[0]} and ${names[1]} are typing…';
+    return '${names.length} people are typing…';
+  }
   int get unreadChats => _chats.values.where((c) => !c.archived && c.unreadCount > 0).length;
 
   /// Clears all state when the signed-in account changes.
   void reset(String? userId) {
     myId = userId ?? '';
     _chats.clear();
-    _typingUntil.clear();
+    _typing.clear();
+    removedChatIds.clear();
     loaded = false;
     error = null;
     notifyListeners();
@@ -82,9 +105,49 @@ class ChatsController extends ChangeNotifier {
     }
   }
 
+  /// Re-fetches one chat (members, title, counters) from the server.
+  Future<void> refreshChat(String chatId) async {
+    try {
+      final data = await api.get('/api/chats/$chatId');
+      if (data['chat'] is Map) upsert(Chat.fromJson(Map<String, dynamic>.from(data['chat'] as Map)));
+    } catch (_) {
+      // not a member any more / offline: the next full load fixes it
+    }
+  }
+
   void upsert(Chat chat) {
     _chats[chat.id] = chat;
     notifyListeners();
+  }
+
+  /* ---------------- groups ---------------- */
+
+  /// Creates a group and invites [memberIds]. Returns the chat and the people who could not be invited.
+  Future<(Chat, List<String>)> createGroup(String title, List<String> memberIds) async {
+    final data = await api.post('/api/groups', {'title': title, 'memberIds': memberIds});
+    final chat = Chat.fromJson(Map<String, dynamic>.from(data['chat'] as Map));
+    // Realtime events (chat:new / chat:updated when someone accepts right away) may already be newer.
+    if (!_chats.containsKey(chat.id)) upsert(chat);
+    final failed = [for (final f in (data['failed'] as List? ?? const [])) (f as Map)['message'] as String];
+    return (chat, failed);
+  }
+
+  Future<void> renameGroup(String chatId, String title) async {
+    final data = await api.patch('/api/groups/$chatId', {'title': title});
+    upsert(Chat.fromJson(Map<String, dynamic>.from(data['chat'] as Map)));
+  }
+
+  Future<void> removeMember(String chatId, String userId) async {
+    final data = await api.delete('/api/groups/$chatId/members/$userId');
+    if (data['chat'] is Map) upsert(Chat.fromJson(Map<String, dynamic>.from(data['chat'] as Map)));
+  }
+
+  Future<void> leaveGroup(String chatId) async {
+    await api.post('/api/groups/$chatId/leave');
+    if (_chats.remove(chatId) != null) {
+      removedChatIds.add(chatId);
+      notifyListeners();
+    }
   }
 
   /// Optimistic archive / mute with rollback on failure.
@@ -153,32 +216,52 @@ class ChatsController extends ChangeNotifier {
         }
       case 'typing':
         final chatId = data['chatId'] as String;
+        final userId = data['userId'] as String? ?? '';
         if (data['isTyping'] == true) {
-          _typingUntil[chatId] = DateTime.now().add(const Duration(seconds: 6));
+          (_typing[chatId] ??= {})[userId] = DateTime.now().add(const Duration(seconds: 6));
         } else {
-          _typingUntil.remove(chatId);
+          _typing[chatId]?.remove(userId);
         }
         notifyListeners();
       case 'presence':
-        for (final c in _chats.values.where((c) => c.peer.id == data['userId'])) {
-          c.peer = c.peer.copyWith(
-            online: data['online'] == true,
-            lastSeenAt: data['lastSeenAt'] != null ? DateTime.tryParse(data['lastSeenAt'] as String)?.toLocal() : null,
-          );
-        }
+        final userId = data['userId'] as String?;
+        final lastSeen = data['lastSeenAt'] != null ? DateTime.tryParse(data['lastSeenAt'] as String)?.toLocal() : null;
+        _updateUser(userId, (u) => u.copyWith(online: data['online'] == true, lastSeenAt: lastSeen));
         if (data['online'] != true) {
-          _typingUntil.removeWhere((chatId, _) => _chats[chatId]?.peer.id == data['userId']);
+          for (final t in _typing.values) {
+            t.remove(userId);
+          }
         }
         notifyListeners();
       case 'user:updated':
         final u = AppUser.fromJson(data);
-        for (final c in _chats.values.where((c) => c.peer.id == u.id)) {
-          c.peer = u;
-        }
+        _updateUser(u.id, (old) => old.withProfileOf(u));
         notifyListeners();
       case 'chat:new':
       case 'chat:updated':
-        if (data['id'] != null) upsert(Chat.fromJson(data));
+        if (data['id'] != null) {
+          removedChatIds.remove(data['id']);
+          upsert(Chat.fromJson(data));
+        }
+      case 'chat:removed':
+        final chatId = data['chatId'] as String?;
+        if (chatId != null && _chats.remove(chatId) != null) {
+          removedChatIds.add(chatId);
+          _typing.remove(chatId);
+          notifications.cancelChat(chatId);
+          notifyListeners();
+        }
+    }
+  }
+
+  /// Applies a profile / presence change to the user wherever they appear (1:1 peer, group member lists).
+  void _updateUser(String? userId, AppUser Function(AppUser) change) {
+    if (userId == null) return;
+    for (final c in _chats.values) {
+      if (c.peer?.id == userId) c.peer = change(c.peer!);
+      if (c.isGroup && c.members.any((m) => m.id == userId)) {
+        c.members = [for (final m in c.members) m.id == userId ? change(m) : m];
+      }
     }
   }
 
@@ -186,7 +269,7 @@ class ChatsController extends ChangeNotifier {
     final mine = m.senderId == myId;
     if (!mine) {
       socket.emit('message:delivered', {'messageIds': [m.id]});
-      _typingUntil.remove(m.chatId);
+      _typing[m.chatId]?.remove(m.senderId);
     }
     final chat = _chats[m.chatId];
     if (chat == null) {
@@ -195,19 +278,30 @@ class ChatsController extends ChangeNotifier {
     }
     chat.lastMessage = m;
     chat.lastActivityAt = m.createdAt;
+    // A group message from someone we don't know yet (missed membership update): resync that chat.
+    if (chat.isGroup && !m.isSystem && m.senderId != null && chat.member(m.senderId) == null) refreshChat(chat.id);
     final viewing = notifications.isViewing(m.chatId);
-    if (!mine && !viewing) chat.unreadCount += 1;
+    if (!mine && !viewing && !m.isSystem) chat.unreadCount += 1;
     notifyListeners();
-    if (!mine && !chat.muted) {
-      notifications.showMessage(chatId: chat.id, title: chat.peer.username, body: messagePreview(m));
+    if (!mine && !chat.muted && !m.isSystem) {
+      final preview = messagePreview(m, myId: myId);
+      notifications.showMessage(
+        chatId: chat.id,
+        title: chat.name,
+        body: chat.isGroup ? '${chat.member(m.senderId)?.username ?? 'Someone'}: $preview' : preview,
+      );
     }
   }
 
   void _expireTyping() {
     final now = DateTime.now();
-    final before = _typingUntil.length;
-    _typingUntil.removeWhere((_, until) => until.isBefore(now));
-    if (_typingUntil.length != before) notifyListeners();
+    var changed = false;
+    for (final t in _typing.values) {
+      final before = t.length;
+      t.removeWhere((_, until) => until.isBefore(now));
+      changed |= t.length != before;
+    }
+    if (changed) notifyListeners();
   }
 
   @override

@@ -32,6 +32,7 @@ class SocketService extends ChangeNotifier {
     'typing',
     'presence',
     'chat:new',
+    'chat:removed',
     'chat:updated',
     'invite:new',
     'invite:updated',
