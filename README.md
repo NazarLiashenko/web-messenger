@@ -1,242 +1,252 @@
-# Mobile Messenger 📲
+# Web Messenger 💬
 
-A full-stack messenger: a **Flutter** app (Android / iOS, web-ready) and a **Node.js** backend with
-**PostgreSQL**, realtime **WebSockets** and **encryption at rest** for all sensitive data.
+A full-stack, end-to-end-tested messenger that runs **in the browser** and on **Android / iOS** from one
+**Flutter** codebase, backed by a **Node.js** API with **PostgreSQL**, realtime **WebSockets** and
+**encryption at rest** for all sensitive data.
+
+**Live app: <https://DEPLOY-URL>** — open it in any modern browser, sign up, done.
 
 <p>
-Registration with email verification · password recovery · persistent sessions · profiles with photos ·
-user search · chat invitations · text / photo / video / voice messages · sent / delivered / read receipts ·
-edit & delete · typing indicators · archive · mute · notifications
+Group chats with invitations · search inside messages with highlighting · polls in groups ·
+adaptive web layout · registration with email verification · password recovery · persistent sessions ·
+profiles with photos · user search · chat invitations · text / photo / video / voice messages ·
+sent / delivered / read receipts · edit & delete · typing indicators · archive · mute · notifications
 </p>
+
+This project continues the [Mobile Messenger](https://gitea.kood.tech/nazarliashenko/mobile-messenger):
+the same Flutter code and the same database schema (extended with migrations), now built for the web and deployed.
 
 ---
 
 ## Contents
 
-- [Reviewer Guide (quick start)](#reviewer-guide-quick-start)
+- [Reviewer guide](#reviewer-guide)
 - [Features](#features)
+- [Usage guide](#usage-guide)
 - [Architecture](#architecture)
 - [Data encryption](#data-encryption)
+- [Design choices & challenges](#design-choices--challenges)
 - [Setup & installation (developers)](#setup--installation-developers)
-- [Usage guide](#usage-guide)
-- [Push notifications (optional Firebase)](#push-notifications-optional-firebase)
+- [Deployment](#deployment)
 - [API overview](#api-overview)
 - [Bonus features](#bonus-features)
 - [Project structure](#project-structure)
 
 ---
 
-## Reviewer Guide (quick start)
+## Reviewer guide
 
-You need **Docker** (Docker Desktop on Windows/macOS) — nothing else. No Node, Flutter or Android Studio.
+### Option 1 — the deployed app (nothing to install)
 
-### 1. Start the backend — one command
+1. Open **<https://DEPLOY-URL>**.
+   The server runs on a free plan and sleeps after 15 minutes without visitors: the **first load can take ~50 s**.
+2. **Sign up** with a real email address — the 6-digit code arrives by email (check *Spam*).
+3. Open a second browser (or a private window) and sign up a second account, so you can chat with yourself.
+
+### Option 2 — run everything locally (Docker only)
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build          # Postgres + Mailpit + API on http://localhost:3000
 ```
 
 | What | Where |
 |---|---|
 | API + WebSocket | `http://localhost:3000` (health check: `/api/health`) |
-| **Mailbox** — all verification / password-reset emails land here | **http://localhost:8025** |
+| **Mailbox** — every verification / reset email lands here | **http://localhost:8025** |
 
-Everything (database, mail server, encryption keys) is created automatically on the first start.
-Stop with `docker compose down` (add `-v` to wipe all data).
-
-> Verification codes are also printed in the backend log: `docker compose logs api | grep code`.
-
-### 2. Get the APK
-
-Download **`messenger.apk`** from
-**[Google Drive](https://drive.google.com/drive/folders/1bXbjqTw1QpXQoeDp_w_V3ySQxmh4fUB3?usp=sharing)**
-(the APK is ~55 MB, so it is not committed to git).
-
-### 3. Point the app at your backend
-
-The app talks to the server URL shown under the **server icon (top-right of the login screen)**.
-Tap it, enter the URL, press **Test**, then **Save**.
-
-| Where the app runs | Server URL to enter |
-|---|---|
-| Android Studio emulator (AVD) | `http://10.0.2.2:3000` *(default — nothing to change)* |
-| BlueStacks / NoxPlayer on the same PC | `http://<your PC's LAN IP>:3000` (e.g. `http://192.168.1.20:3000`) |
-| Physical phone on the same Wi-Fi | `http://<your PC's LAN IP>:3000` |
-| appetize.io or a phone outside your network | the public tunnel URL (see below) |
-
-Find your LAN IP with `ipconfig` (Windows) or `ip addr` / `ifconfig` (Linux / macOS).
-If the phone can't connect, allow port 3000 through the PC firewall.
-
-**Public URL (for appetize.io / remote devices)** — start the backend with the built-in Cloudflare tunnel:
+The web app is then served by Flutter (`cd app && flutter run -d chrome`) or as the full production image:
 
 ```bash
-docker compose --profile tunnel up -d --build
-docker compose logs tunnel | grep trycloudflare      # → https://something-random.trycloudflare.com
+docker build -t messenger .            # Flutter web build + API in one image (takes a few minutes)
+docker run -p 8080:3000 --network web-messenger_default \
+  -e DATABASE_URL=postgres://messenger:messenger@db:5432/messenger \
+  -e MASTER_KEY=<base64 of 32 random bytes> -e SMTP_HOST=mail -e SMTP_PORT=1025 messenger
+# → http://localhost:8080
 ```
 
-Use that `https://….trycloudflare.com` address as the server URL in the app.
+> Verification codes are also printed in the server log: `docker compose logs api | grep code`.
 
-### Option A — Install on an Android device
+### A scripted second user
 
-1. Copy `messenger.apk` to the phone (USB, cloud drive, or download it on the phone).
-2. Open it and allow *Install unknown apps* when Android asks.
-3. Open **Messenger** → server icon → enter `http://<PC LAN IP>:3000` → **Save**.
-
-### Option B — Lightweight emulator (BlueStacks / NoxPlayer)
-
-1. Install BlueStacks (https://www.bluestacks.com) or NoxPlayer (https://www.bignox.com).
-2. Drag & drop `messenger.apk` onto the emulator window (or use its *Install APK* button).
-3. Open **Messenger** → server icon → `http://<PC LAN IP>:3000` → **Save**.
-   (These emulators don't support `10.0.2.2`; use the PC's LAN IP.)
-
-### Option C — Browser-based emulator (appetize.io)
-
-1. Start the backend **with the tunnel** (see above) and copy the `https://….trycloudflare.com` URL.
-2. Go to https://appetize.io/upload, upload `messenger.apk`, open the generated link.
-3. In the app: server icon → paste the tunnel URL → **Test** → **Save**.
-
-### Trying it alone — a scripted second user
-
-Chatting needs two people. A demo user **dave** can play the other side: it accepts invites,
-shows "typing…", reads your messages and replies automatically.
+A demo user **dave** can play the other side: it accepts chat and group invitations, shows "typing…",
+reads your messages, replies, and votes in new polls.
 
 ```bash
-docker compose exec api node scripts/demo-peer.js <your-username>
+cd backend && npm install
+node scripts/demo-peer.js <your-username> [apiUrl] [mailpitUrl]     # local: defaults; deployed: pass the URL
 ```
 
-It registers `dave` (password `Demo!pass1`), sends *you* a chat invitation and keeps running.
-Alternatively register a second account on another emulator / device.
-
-> **Tip for old Android Studio emulator images:** the system file picker (DocumentsUI) on some AVDs ignores
-> taps on files. Use its 🔍 search or the keyboard (Tab / arrows / Enter) to pick a photo or video. Real devices,
-> BlueStacks and appetize are not affected. Test media can be pushed with `adb push file.mp4 /sdcard/Movies/`.
+(Against the deployed app dave needs a real mailbox to verify his email, so use it locally,
+or simply register a second account in another browser.)
 
 ### Suggested review path
 
-1. **Sign up** – try a weak password (live checklist, button disabled), an existing email/username (inline error).
-2. Open **http://localhost:8025**, read the code, **verify** the email.
-3. Close & reopen the app → you are still logged in.
-4. **Profile** tab → set a photo (JPEG/PNG ≤ 5 MB) and *About me*; default picture is shown until then.
-5. **Invites** tab → accept dave's invitation (or search a user and **Invite**).
-6. Chat: send text, photo, video, voice; watch ✓ sent → ✓✓ delivered → blue ✓✓ read; see "typing…".
-7. Long-press your message → **Edit** / **Delete**.
-8. Long-press / swipe a chat → **Archive**, **Mute**. Archived chats sit under *Archived chats*.
-9. Stop the server (`docker compose stop api`) and send something → "Connecting…" banner, red ⚠ *Not sent*;
-   start it again (`docker compose start api`) → the message is delivered automatically.
-10. *Forgot password?* on the login screen → code by email → new password.
+1. **Sign up** — try a weak password (live checklist) and an existing username (inline error); verify the email.
+2. **Adaptive layout** — make the window wide (chat list + open chat side by side, navigation rail) and narrow
+   (phone layout with bottom navigation). Reload the page: you stay logged in.
+3. **1:1 chat** — invite the second account (🔍 → *Invite*), accept in *Invites*, send text / photo / voice.
+   Watch ✓ → ✓✓ → blue ✓✓, "typing…". Right-click a message → *Edit* / *Delete*. **Enter** sends, **Shift+Enter** = new line.
+4. **Group chat** — *New group* (👥 icon in the chat list) → name + people → they receive an **invitation**
+   (*Invites* tab → accept / decline). Open the group: member count, sender names, "Bob is typing…",
+   group events ("Bob joined the group"). Group info (click the title): invite more people, rename / remove (owner), leave.
+5. **Search in a chat** — 🔍 in the chat header (or **Ctrl/⌘+F**) → matches are **highlighted**, "3 of 12",
+   **↑ / ↓** (or Enter / Shift+Enter) jump between them, older history loads automatically. Esc closes.
+6. **Polls (bonus)** — in a group: 📎 → *Poll* → question, options, *Anonymous voting*, *Multiple answers*.
+   Vote, change the vote, *Retract*; in a public poll click a vote count to see who voted;
+   the author closes the poll (right-click → *Close poll*).
+7. **Errors** — stop the network (DevTools → Offline) and send a message: "Connecting…" banner, red ⚠ *Not sent*,
+   automatic re-send when you are back online. Invalid actions show a message and roll back to the last good state.
 
 ---
 
 ## Features
 
-### Registration & authentication
-- Sign up with **email, username, password**; log in with email + password.
-- Duplicate **email / username** rejected (checked live while typing and again on submit, inline error under the field).
-- **Password strength** (≥ 8 chars, lower, upper, digit, special) — live checklist + strength bar on the client, enforced again on the server.
-- **Email verification** with a 6-digit code (15 min validity, 5 attempts, resend with cooldown).
-- **Password recovery** by email code; a reset logs out every device.
-- **Persistent session**: short-lived JWT access token (15 min) + rotating refresh token (30 days, sliding)
-  kept in the platform keystore (Android Keystore / iOS Keychain). The user stays logged in until they log out
-  or the session expires/is revoked — then they're sent to the login screen with a message.
+### Web version
+- The same Flutter app compiled for the browser; all mobile features work (media uses the browser's file picker,
+  voice messages are recorded with the browser microphone).
+- **Adaptive layout**: phones get the mobile UI (bottom navigation, full-screen chats); from 900 px the app switches to a
+  desktop layout — navigation rail, chat list and the open chat **side by side**; pages keep a readable width on big screens.
+- **Desktop habits**: Enter to send / Shift+Enter for a new line, Esc to cancel editing, right-click context menus on
+  messages and chats, Ctrl/⌘+F to search the open chat, the unread count in the browser tab title ("(2) Messenger"),
+  tooltips on every icon button, loading splash, web manifest.
+- Served from the **same origin** as the API (no CORS, no configuration) with a strict **Content-Security-Policy**.
 
-### Profile
-- Profile picture, username, About me (+ email, password). First login shows a **default picture** and empty About me.
-- Profile picture: **JPEG and PNG**, up to **5 MB** (validated by magic bytes on the server, size on both sides).
-- Everything is editable: photo (gallery / camera / remove), username, About me, email (re-verified by code), password.
-- Profile changes propagate to contacts in real time.
+### Group chats
+- Create a group with a name and pick people from your contacts or by search.
+- **Invitations**: picked people receive a group invitation (realtime + notification) and join only after **accepting**;
+  they can also **decline**; the inviter can **cancel** a pending invitation. Any member can invite more people.
+- Roles: the creator is the **owner** — can rename the group and remove members. Anyone can leave; when the owner leaves,
+  ownership passes to the longest-standing member.
+- Group events appear in the history ("Anna created the group", "Bob joined the group (invited by Anna)", "Anna removed Bob").
+- Per-member unread counters, "Bob is typing…", sender names and colours, member list with online status.
+- Members who leave lose access to the group (and to searching it), but their old messages keep their name.
 
-### Search & invitations
-- Search by **username prefix** or **exact email** (case-insensitive) — works on encrypted data via blind indexes.
-- Send / accept / decline / cancel **chat invitations**; list of **pending** invitations (received & sent) with a badge.
-- No invite needed when the person is already in your chat list (button becomes **Message**). If they invited you
-  already, "Invite" accepts their invitation.
+### Search inside chats
+- Search the text of messages (and media captions / poll questions) in any 1:1 or group chat.
+- Case-insensitive; all matches **highlighted**; the current one is outlined; counter "n of N".
+- **Navigate** between matches (newest → oldest and back); the chat scrolls precisely to the message and loads
+  older history on the way.
+- Works although message bodies are **encrypted in the database** — see [Design choices](#design-choices--challenges).
 
-### Chat list
-- Sorted by time of the last sent/received message; shows last message preview, its status, unread count,
-  online dot, typing indicator, muted icon.
-- **Archive / unarchive** (swipe or long-press, with *Undo*), **mute** notifications per chat.
-
-### Messaging
-- **Text, images, videos, voice messages** (record with the microphone, play inline with seek).
-- Images are resized & re-compressed on the device; videos are **transcoded on the device** (H.264, 960×540) —
-  e.g. a 15.5 MB 1080p clip becomes ~2.7 MB. The **20 MB limit** applies after compression
-  (checked on the client and enforced by the server). Videos get a preview frame and duration.
-- **Status indicators**: 🕓 sending → ✓ sent → ✓✓ delivered → blue ✓✓ read, and red ⚠ **failed** with *tap to retry*.
-  Sending is idempotent (client-generated id), so retries never duplicate messages.
-- **Edit** and **delete** your own messages (for everyone; "edited" label / "This message was deleted").
-- **Typing indicators**, online status & "last seen".
-- Paginated history (infinite scroll), day separators, full-screen image viewer and video player.
-
-### Notifications
-- New messages and invitations raise **system notifications** while the app is in the background;
-  tapping opens the right chat / the invitations tab. Muted chats stay silent.
-- Optional **FCM push** for when the app is fully closed (see below).
+### Everything from the mobile version
+- **Accounts**: sign up (email, username, password with live strength checklist), email verification by a 6-digit code,
+  login, password recovery by email, persistent sessions (short-lived JWT + rotating refresh token), logout.
+- **Profile**: picture (JPEG / PNG ≤ 5 MB, default picture until set), username, About me, change email / password.
+- **People**: search by username prefix or exact email, chat invitations (send / accept / decline / cancel).
+- **Chat list** sorted by the last message, previews, unread badges, online dots, typing, archive (swipe or menu, with Undo), mute.
+- **Messages**: text, images, videos, voice messages (≤ 20 MB after compression), sent / delivered / read status,
+  edit & delete for everyone, typing indicators, last seen, infinite scroll, day separators, image / video viewer.
+- **Notifications** for new messages and invitations (system notifications on mobile; tab title on the web).
 
 ### Error handling
-- Every API error has a stable code and a human-readable message shown as inline field errors or snackbars.
-- Network loss → "Connecting…" banner, automatic reconnect & resync (missed messages, statuses, invites).
-- Optimistic UI with rollback: failed edits, archive/mute toggles revert to the last stable state; unsent
-  messages stay in the chat marked as failed and are **re-sent automatically when the connection returns**
-  (or manually with *tap to retry*).
-- Offline start: the chat list and the last 50 messages of each chat are cached on the device (encrypted by the
-  platform keystore), so the app opens to the last known state even when the server is unreachable.
-- Expired access tokens are refreshed transparently (single-flight); an expired session leads back to login.
+- Every API error has a stable code and a readable message (inline under form fields or as a snackbar).
+- Optimistic UI with rollback: edits, archive / mute, votes return to the last stable state if the server refuses.
+- Network loss → "Connecting…" banner, automatic reconnect and resync; unsent messages are marked ⚠ and re-sent
+  automatically when the connection is back (or manually: tap → *Retry*). Sending is idempotent (no duplicates).
+- Removed from a group while it is open → the chat closes with an explanation.
+
+---
+
+## Usage guide
+
+| Task | How |
+|---|---|
+| Create an account | *Sign up* → enter the 6-digit code from the email |
+| Reset the password | Login screen → *Forgot password?* |
+| Find people / start a 1:1 chat | Chats → 🔍 → type a username or email → *Invite*; accept in *Invites* |
+| Create a group | Chats → 👥 (*New group*) → name + people → *Create* |
+| Accept / decline a group invitation | *Invites* tab → ✓ / ✕ |
+| Invite to / manage a group | Open the group → click its name → *Invite people*, ✏️ rename, ⋮ remove member, *Leave group* |
+| Search in a chat | 🔍 in the chat header or **Ctrl/⌘+F** → type; **Enter** / ↑ older, **Shift+Enter** / ↓ newer, **Esc** closes |
+| Create a poll (groups) | 📎 → *Poll* |
+| Vote / change / retract | Tap an option; in multiple-choice polls tick options → *Vote*; *Change*, *Retract* |
+| See who voted (public poll) | Click the number of votes next to an option |
+| Close a poll (author) | Right-click / long-press the poll → *Close poll* |
+| Send media | 📎 → photo / video; 🎤 → record → ➤ |
+| Edit / delete / copy | Right-click (web) or long-press (mobile) your message |
+| Archive / mute | Right-click / swipe a chat, or ⋮ inside the chat |
+| Change the server (mobile app) | Server icon on the login screen |
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────┐        REST (JSON, multipart)        ┌──────────────────────────────┐
-│ Flutter app              │ ───────────────────────────────────▶ │ Node.js 22 · Express 5        │
-│  provider (state)        │ ◀── Socket.IO (realtime events) ───▶ │ Socket.IO · zod validation    │
-│  dio · socket_io_client  │                                       │ AES-256-GCM encryption layer  │
-│  secure storage (tokens) │                                       └──────┬───────────┬────────────┘
-└──────────────────────────┘                                              │           │
-                                                               PostgreSQL 17     encrypted media files
-                                                               (encrypted cols)  (Docker volume)
-                                                                          │
-                                                                    SMTP → Mailpit (dev) / any SMTP
+            Browser / Android / iOS — one Flutter codebase
+┌────────────────────────────────────────────────────────────────┐
+│ provider (state) · dio (REST) · socket_io_client (realtime)     │
+│ adaptive layout · super_sliver_list (jump to a message)         │
+└───────────────┬────────────────────────────────┬───────────────┘
+                │ HTTPS (REST, JSON / multipart) │ WSS (Socket.IO)
+┌───────────────▼────────────────────────────────▼───────────────┐
+│ Node.js 22 · Express 5 · Socket.IO · zod validation · helmet    │
+│ serves the built web app from the same origin                   │
+│ AES-256-GCM encryption layer + HMAC blind indexes               │
+└───────────────┬────────────────────────────────┬───────────────┘
+                │                                │
+        PostgreSQL 17 (Neon)            Brevo HTTP API / SMTP
+   encrypted columns + media blobs        (verification emails)
 ```
 
-- **Backend** (`backend/`): stateless REST API + Socket.IO. Postgres for data, encrypted files on a volume for
-  media. Migrations run automatically on start.
-- **Realtime**: server → client events `message:new`, `message:updated`, `message:status`, `typing`, `presence`,
-  `chat:new|updated`, `invite:new|updated`, `user:updated`; client → server `typing`, `message:delivered`.
-- **Delivery receipts**: *delivered* when the recipient's device receives the message (socket ack, or when it
-  fetches the chat list after being offline); *read* when the chat is open on screen.
-- **App** (`app/`): `core/` (API client, socket, notifications, config), `state/` (ChangeNotifier controllers),
-  `screens/`, `widgets/`. Platform-specific code is isolated so the same codebase builds for **web**
-  (the planned web version will reuse the API and this code).
+- **Backend** (`backend/`): stateless REST API + Socket.IO; SQL migrations run automatically on start
+  (`001_init` … `005_media_blobs`).
+- **Realtime events** (server → client): `message:new`, `message:updated`, `message:status`, `typing`, `presence`,
+  `chat:new`, `chat:updated`, `chat:removed`, `invite:new`, `invite:updated`, `poll:updated`, `user:updated`.
+  Each member receives *their own* view where it differs (archived / muted flags, own poll votes).
+- **App** (`app/`): `core/` (API client, socket, navigation, config), `state/` (ChangeNotifier controllers:
+  auth, chats, invites, chat room, chat search), `screens/`, `widgets/`. Platform-specific code (keystore, notifications,
+  video compression) is isolated so the web build uses browser equivalents.
 
 ## Data encryption
 
-All sensitive data is encrypted **before** it is written to the database or disk:
+All sensitive data is encrypted **before** it is written to the database:
 
 | Data | Storage |
 |---|---|
-| Email, username, About me | AES-256-GCM ciphertext (`*_enc` columns) |
-| Message text and metadata | AES-256-GCM |
-| Photos, videos, voice messages, profile pictures | AES-256-GCM encrypted files |
-| Contacts / chat list (chat membership, invitation parties, message senders) | user ids stored encrypted; lookups use HMAC-SHA256 **blind indexes**, so the database alone does not reveal who talks to whom |
-| Push tokens, device names | AES-256-GCM |
-| On-device cache (tokens, chat list, recent messages) | Android Keystore / iOS Keychain (flutter_secure_storage), wiped on logout |
-| Passwords | scrypt (salted, memory-hard) — hashed, never encrypted |
+| Email, username, About me | AES-256-GCM ciphertext |
+| Message text and metadata, group names, group events | AES-256-GCM |
+| Poll options | AES-256-GCM; votes of **anonymous** polls store only a blind index of the voter (no user id at all) |
+| Photos, videos, voice messages, avatars | AES-256-GCM encrypted bytes (file volume locally, `media_blobs` table in the cloud) |
+| Who talks to whom (chat members, invitation parties, senders) | encrypted user ids + HMAC-SHA256 **blind indexes** for lookups |
+| On-device cache / tokens | platform keystore on mobile, WebCrypto-encrypted storage on the web; wiped on logout |
+| Passwords | scrypt (salted, memory-hard) |
 | Refresh tokens, email codes | SHA-256 / HMAC hashes only |
 
-- Independent sub-keys (encryption, file encryption, blind index, URL signing, JWT) are derived from one
-  256-bit **master key** with HKDF-SHA256. Every value gets a random 96-bit IV and an authentication tag.
-- The master key comes from `MASTER_KEY` (base64, 32 bytes) or is generated on first start and stored in the
-  `api-data` volume (`/data/master.key`). **Back it up** — without it the data can't be decrypted.
-- Media is served through **signed, expiring URLs** and decrypted on the fly (with HTTP Range support for seeking).
-- Search works on encrypted data: exact email via a blind index, username via blind-indexed prefixes.
+- Sub-keys for encryption, blind indexes, URL signing and JWT are derived with HKDF-SHA256 from one 256-bit
+  **master key** (`MASTER_KEY`). Every value gets a random IV and an authentication tag.
+- Media is served through signed, expiring URLs and decrypted on the fly (HTTP Range supported for seeking).
 
-Check it yourself:
+Check it yourself (locally):
 
 ```bash
-docker compose exec db psql -U messenger -c "SELECT username_enc, about_enc FROM users LIMIT 3;"
 docker compose exec db psql -U messenger -c "SELECT type, body_enc FROM messages LIMIT 3;"
+docker compose exec db psql -U messenger -c "SELECT kind, title_enc FROM chats WHERE kind='group';"
 ```
+
+---
+
+## Design choices & challenges
+
+- **Searching encrypted messages.** The database only has ciphertext, so `LIKE` is impossible, and blind-indexed word
+  tokens would only allow whole-word search. The server therefore decrypts the messages of *one* chat in memory when a
+  member searches it, matches case-insensitively and returns only message ids (newest first). Nothing decrypted is ever
+  written anywhere; non-members get 404. The client then highlights matches in the bubbles it already has and loads
+  older pages until the selected match is in memory, then scrolls to it precisely (`super_sliver_list`, because a
+  normal `ListView` cannot jump to an item of unknown height).
+- **Groups on top of 1:1 chats.** The existing `chats` / `chat_members` tables got a `kind`, roles, `left_at` and a
+  per-member `last_read_at`, instead of a separate group model. Members who leave keep their row, so old messages still
+  show a sender; group invitations reuse the `invitations` table (with `chat_id`). In groups a message counts as *read*
+  when any member read it, while every member keeps their own unread counter.
+- **Polls are messages.** A poll is a message of type `poll` (so it appears in history, previews, search and realtime
+  delivery like everything else) plus `polls` / `poll_votes` tables. The server builds a per-viewer view (own votes,
+  voters only for public polls).
+- **One deployment unit.** The production `Dockerfile` builds the Flutter web app and serves it from the API process.
+  One URL, no CORS, and the web app needs no configuration — it talks to the server it was loaded from.
+- **Free hosting constraints.** Render's free instance has no persistent disk → encrypted media is stored in Postgres
+  (`MEDIA_STORAGE=db`). It also blocks outbound SMTP → emails go through Brevo's HTTPS API. The server refuses to start on
+  Render without `MASTER_KEY`, because a generated key would be lost on the next deploy and the data with it.
+- **Web specifics.** Keyboard and right-click interactions, same-origin serving, a strict CSP (no inline scripts — the
+  splash screen logic lives in `splash.js`), self-hosted CanvasKit (`--no-web-resources-cdn`).
 
 ---
 
@@ -245,81 +255,57 @@ docker compose exec db psql -U messenger -c "SELECT type, body_enc FROM messages
 ### Backend
 
 ```bash
-docker compose up -d --build            # Postgres + Mailpit + API
-cd backend && npm install && npm run smoke   # end-to-end API test suite against the running stack
+docker compose up -d --build                  # Postgres + Mailpit + API
+cd backend && npm install && npm run smoke    # end-to-end API test suite against the running stack
 ```
 
-Without Docker for the API itself (Postgres still required):
+`npm run smoke` covers registration, invitations, messaging and receipts, media, archive/mute, token rotation,
+password reset, **groups** (invites, roles, leave, per-member unread), **search** and **polls**.
 
-```bash
-cd backend
-npm install
-DATABASE_URL=postgres://messenger:messenger@localhost:5432/messenger npm start
-```
-
-Configuration (environment variables, all optional):
+Configuration (environment variables):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MASTER_KEY` | generated | base64 32-byte master encryption key |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` | Mailpit | real SMTP (e.g. Gmail app password) |
-| `MAIL_FROM` | `Messenger <no-reply@messenger.local>` | sender address |
-| `ACCESS_TOKEN_TTL_SEC` | `900` | access token lifetime |
-| `REFRESH_TOKEN_TTL_DAYS` | `30` | session lifetime (sliding) |
-| `FIREBASE_SERVICE_ACCOUNT` | `/data/firebase-service-account.json` | enables FCM push |
+| `DATABASE_URL` | local Postgres | Postgres connection string |
+| `MASTER_KEY` | generated in the data volume | base64 32-byte master key (**required on Render**) |
+| `MEDIA_STORAGE` | `fs` | `fs` = encrypted files on the data volume, `db` = encrypted blobs in Postgres |
+| `WEB_DIR` | – | folder with the built web app to serve (set in the production image) |
+| `BREVO_API_KEY` | – | send emails through Brevo's HTTPS API instead of SMTP |
+| `MAIL_FROM` | `Messenger <no-reply@messenger.local>` | sender (must be verified in Brevo when using it) |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` | Mailpit | SMTP server |
+| `ACCESS_TOKEN_TTL_SEC` / `REFRESH_TOKEN_TTL_DAYS` | `900` / `30` | session lifetimes |
+| `DB_POOL_MAX` | `20` | Postgres connections |
 | `LOG_EMAIL_CODES` | `true` | print verification codes in the log |
-
-To send real emails, put the SMTP settings in a `.env` file next to `docker-compose.yml` (see `.env.example`).
 
 ### Flutter app
 
-Requirements: Flutter 3.50+ (Dart 3.14), Android SDK 37.
+Requirements: Flutter 3.50 (Dart 3.14).
 
 ```bash
 cd app
 flutter pub get
-flutter run                                         # emulator uses http://10.0.2.2:3000 by default
-flutter build apk --release                         # → build/app/outputs/flutter-apk/app-release.apk
-flutter build apk --release --dart-define=API_URL=https://my-server.example.com   # bake in a server URL
+flutter run -d chrome --dart-define=API_URL=http://localhost:3000    # web against the local API
+flutter build web --release --no-web-resources-cdn                   # → app/build/web
+flutter build apk --release                                          # Android (emulator default: http://10.0.2.2:3000)
 ```
-
-iOS: `flutter build ios` (permissions for camera, microphone and photos are already declared in `Info.plist`).
 
 ---
 
-## Usage guide
+## Deployment
 
-| Task | How |
-|---|---|
-| Create an account | Login screen → **Sign up** → enter the 6-digit code from the email |
-| Reset the password | Login screen → **Forgot password?** |
-| Change the server | Server icon in the top-right corner of the login screens |
-| Find people | Chats → 🔍 (or the ✏️ button) → type a username or an email |
-| Invite / accept | Search result → **Invite**; incoming invites are in the **Invites** tab |
-| Send media | 📎 → photo / video (gallery or camera); 🎤 → record → ➤ (🗑 cancels) |
-| Edit / delete / copy | Long-press your message |
-| Retry a failed message | Tap it → **Retry** (or **Remove**) |
-| Archive / mute | Swipe a chat left, long-press it, or use ⋮ inside the chat |
-| Edit profile | **Profile** tab → tap the photo / any field |
-| Log out | Profile → **Log out** |
+The live app runs on **Render** (free web service, Docker) with a free **Neon** Postgres database and **Brevo** for email.
 
-## Push notifications (optional Firebase)
+1. Create a Postgres database (e.g. Neon) and copy its connection string (`…?sslmode=require`).
+2. Create a Brevo account, verify a sender address and create an API key.
+3. Generate a master key and **keep a copy**:
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`
+4. Render → *New → Blueprint* → this repository (`render.yaml`) → fill in `DATABASE_URL`, `MASTER_KEY`,
+   `BREVO_API_KEY`, `MAIL_FROM` → deploy. Every push to `main` redeploys.
 
-Out of the box, notifications are delivered over the realtime connection while the app process is alive
-(foreground or background). For push while the app is **closed**, enable Firebase Cloud Messaging:
+The `Dockerfile` builds the web app with Flutter 3.50 (as a non-root user — Render's build sandbox does not allow
+changing file owners), then copies it next to the API. Migrations run on start.
 
-1. Create a Firebase project, add an Android app with package `com.nazarliashenko.messenger`.
-2. Backend: download a service-account JSON and copy it into the API volume:
-   `docker compose cp firebase.json api:/data/firebase-service-account.json && docker compose restart api`
-3. App: build with your Firebase web/app config:
-
-   ```bash
-   flutter build apk --release \
-     --dart-define=FIREBASE_API_KEY=... --dart-define=FIREBASE_APP_ID=... \
-     --dart-define=FIREBASE_SENDER_ID=... --dart-define=FIREBASE_PROJECT_ID=...
-   ```
-
-The server then sends FCM pushes for new messages (unless the chat is muted) and invitations to users who are offline.
+---
 
 ## API overview
 
@@ -331,36 +317,40 @@ Errors look like `{"error": {"code": "USERNAME_TAKEN", "message": "...", "field"
 | Auth | `POST /auth/register`, `/auth/verify-email`, `/auth/resend-verification`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/forgot-password`, `/auth/reset-password`, `GET /auth/availability` |
 | Me | `GET/PATCH /me`, `PUT/DELETE /me/avatar`, `POST /me/password`, `POST /me/email`, `POST /me/email/confirm`, `POST /me/push-token` |
 | Users | `GET /users/search?q=`, `GET /users/:id` |
-| Invites | `GET /invites`, `POST /invites`, `POST /invites/:id/accept`, `POST /invites/:id/decline`, `DELETE /invites/:id` |
-| Chats | `GET /chats`, `GET/PATCH /chats/:id`, `GET/POST /chats/:id/messages`, `POST /chats/:id/read` |
+| Invites (1:1 and group) | `GET /invites`, `POST /invites`, `POST /invites/:id/accept`, `POST /invites/:id/decline`, `DELETE /invites/:id` |
+| Groups | `POST /groups`, `GET/PATCH /groups/:id`, `POST /groups/:id/invites`, `POST /groups/:id/leave`, `DELETE /groups/:id/members/:userId` |
+| Chats | `GET /chats`, `GET/PATCH /chats/:id`, `GET/POST /chats/:id/messages`, `POST /chats/:id/read`, `GET /chats/:id/search?q=` |
 | Messages | `PATCH /messages/:id`, `DELETE /messages/:id` |
-| Media | `POST /media` (multipart, `kind=image|video|audio`), `GET /media/:id?exp&sig` |
+| Polls | `POST /chats/:id/polls`, `PUT/DELETE /polls/:id/vote`, `POST /polls/:id/close` |
+| Media | `POST /media` (multipart), `GET /media/:id?exp&sig` |
 
 ## Bonus features
 
-- Live username / email availability check during sign-up.
-- Change email (verified by a code to the new address) and change password (logs out other devices).
-- Online / last-seen presence.
-- Swipe-to-archive with Undo; unread counters and badges.
-- Dark theme (follows the system).
-- Idempotent message sending with retry; optimistic UI with rollback.
-- Built-in public tunnel (`--profile tunnel`) for remote testing.
-- Demo peer bot (`scripts/demo-peer.js`) and an end-to-end API smoke test (`npm run smoke`).
-- Rate limiting on auth endpoints.
+- **Polls in group chats** — anonymous or public (chosen by the author), single or multiple answers, vote / change /
+  retract, results with percentages, voters list for public polls, closing by the author, realtime updates,
+  searchable questions. Anonymous polls don't even store voter ids.
+- Desktop-grade web UX: keyboard shortcuts (Enter / Shift+Enter / Esc / Ctrl+F), right-click menus, unread count in the
+  tab title, strict Content-Security-Policy, loading splash.
+- Group roles (owner can rename / remove; ownership passes on), group events in the history, re-joining keeps history.
+- From the mobile version: live username / email availability, change email & password, online / last-seen presence,
+  swipe-to-archive with Undo, dark theme, idempotent sending with retry, demo bot and an end-to-end smoke test suite.
 
-None of these change the required default behaviour.
+None of these change the required default behaviour: polls are only an extra item in the attachment menu of groups.
 
 ## Project structure
 
 ```
-docker-compose.yml        backend stack (db, mail, api, optional tunnel)
+Dockerfile                production image: Flutter web build + API (used by Render)
+render.yaml               Render blueprint
+docker-compose.yml        local stack (Postgres, Mailpit, API, optional tunnel)
 backend/
-  src/                    Express app, routes, services, crypto, realtime, push
-  migrations/             SQL schema
+  src/                    Express app, routes (auth, me, users, invites, groups, chats, polls, media), crypto, realtime
+  migrations/             SQL schema 001–005
   scripts/                smoke-test.js, demo-peer.js
 app/
-  lib/core/               API client, socket, session storage, notifications, push, validators
-  lib/state/              auth, chats, invites, chat room controllers
-  lib/screens/            auth, home / chat list, chat, search, invites, profiles, media viewer
-  lib/widgets/            message bubble, audio player, avatar, shared UI
+  lib/core/               API client, socket, chat navigation, session storage, notifications, validators
+  lib/state/              auth, chats, invites, chat room, chat search controllers
+  lib/screens/            auth, home (adaptive layout), chat (search, polls), groups, invites, search, profiles
+  lib/widgets/            message bubble (highlighting), poll card, avatars, shared UI
+  web/                    index.html, splash.js, manifest, icons
 ```
