@@ -67,8 +67,28 @@ class ChatRoomController extends ChangeNotifier {
     }
   }
 
-  Future<void> loadMore() async {
-    if (loadingMore || !hasMore || messages.isEmpty) return;
+  Future<void>? _loadingMoreFuture;
+
+  /// Loads older pages until the message is in [messages] (used to jump to a search result).
+  /// Returns false if it is not in this chat's history (deleted meanwhile, or loading failed).
+  Future<bool> ensureLoaded(String messageId) async {
+    var guard = 0;
+    while (!messages.any((m) => m.id == messageId)) {
+      if (!hasMore || guard++ > 200) return false;
+      final before = messages.length;
+      await loadMore();
+      if (messages.length == before && !loadingMore) return messages.any((m) => m.id == messageId);
+    }
+    return true;
+  }
+
+  Future<void> loadMore() {
+    if (loadingMore) return _loadingMoreFuture ?? Future.value();
+    return _loadingMoreFuture = _loadMore();
+  }
+
+  Future<void> _loadMore() async {
+    if (!hasMore || messages.isEmpty) return;
     loadingMore = true;
     _notify();
     try {

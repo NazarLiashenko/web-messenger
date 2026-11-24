@@ -39,7 +39,15 @@ class MessageBubble extends StatelessWidget {
     this.onTapFailed,
     this.senderName,
     this.senderColor,
+    this.highlight,
+    this.focused = false,
   });
+
+  /// Search text to highlight inside the message (case-insensitive).
+  final String? highlight;
+
+  /// This message is the currently selected search result.
+  final bool focused;
 
   /// Author shown above the message (group chats).
   final String? senderName;
@@ -95,7 +103,16 @@ class MessageBubble extends StatelessWidget {
           if (m.text != null && m.text!.isNotEmpty)
             Padding(
               padding: EdgeInsets.only(top: hasMedia ? 6 : 0),
-              child: Text(m.text!, style: TextStyle(color: fg, fontSize: 15.5)),
+              child: highlight == null || highlight!.isEmpty
+                  ? Text(m.text!, style: TextStyle(color: fg, fontSize: 15.5))
+                  : Text.rich(
+                      highlightSpans(m.text!, highlight!,
+                          base: TextStyle(color: fg, fontSize: 15.5),
+                          match: TextStyle(
+                            backgroundColor: focused ? Colors.orange : Colors.yellow.withValues(alpha: 0.85),
+                            color: Colors.black,
+                          )),
+                    ),
             ),
         ],
       );
@@ -107,6 +124,7 @@ class MessageBubble extends StatelessWidget {
       padding: EdgeInsets.fromLTRB(hasMedia ? 6 : 12, hasMedia ? 6 : 8, hasMedia ? 6 : 10, 6),
       decoration: BoxDecoration(
         color: bg,
+        border: focused ? Border.all(color: Colors.orange, width: 2) : null,
         borderRadius: BorderRadius.only(
           topLeft: const Radius.circular(16),
           topRight: const Radius.circular(16),
@@ -294,4 +312,23 @@ class MessageBubble extends StatelessWidget {
     }
     return const SizedBox.shrink();
   }
+}
+
+/// Splits [text] into spans with every case-insensitive occurrence of [query] styled as [match].
+TextSpan highlightSpans(String text, String query, {required TextStyle base, required TextStyle match}) {
+  final lower = text.toLowerCase();
+  final q = query.toLowerCase();
+  // Lower-casing can change the length of some characters; then indexes would not line up.
+  if (q.isEmpty || lower.length != text.length) return TextSpan(text: text, style: base);
+  final spans = <TextSpan>[];
+  var start = 0;
+  while (true) {
+    final i = lower.indexOf(q, start);
+    if (i < 0) break;
+    if (i > start) spans.add(TextSpan(text: text.substring(start, i)));
+    spans.add(TextSpan(text: text.substring(i, i + q.length), style: match));
+    start = i + q.length;
+  }
+  if (start < text.length) spans.add(TextSpan(text: text.substring(start)));
+  return TextSpan(style: base, children: spans);
 }

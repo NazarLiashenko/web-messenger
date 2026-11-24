@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:record/record.dart';
+import 'package:super_sliver_list/super_sliver_list.dart';
 
 import '../core/api_client.dart';
 import '../core/chat_navigation.dart';
@@ -17,6 +18,7 @@ import '../core/socket_service.dart';
 import '../models/models.dart';
 import '../state/auth_controller.dart';
 import '../state/chat_room_controller.dart';
+import '../state/chat_search_controller.dart';
 import '../state/chats_controller.dart';
 import '../widgets/common.dart';
 import '../widgets/message_bubble.dart';
@@ -44,6 +46,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Message? _editing;
   bool _compressing = false;
 
+  // In-chat search
+  late final ChatSearchController _search;
+  final _listController = ListController();
+  final _searchInput = TextEditingController();
+  final _searchFocus = FocusNode();
+  Timer? _searchDebounce;
+  bool _searching = false;
+  String? _jumpedTo;
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +69,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       myId: context.read<AuthController>().user!.id,
     )..load();
     _notifications.openChatIds.add(widget.chatId);
+    _search = ChatSearchController(context.read<ApiClient>(), widget.chatId)..addListener(_onSearchChanged);
+    _searchFocus.onKeyEvent = _onSearchKey;
     _focus.onKeyEvent = _onComposerKey;
     _scroll.addListener(() {
       if (_scroll.position.pixels > _scroll.position.maxScrollExtent - 400) _room.loadMore();
@@ -89,7 +102,131 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _notifications.openChatIds.remove(widget.chatId);
     _room.dispose();
     _scroll.dispose();
+    _search.dispose();
+    _listController.dispose();
+    _searchInput.dispose();
+    _searchFocus.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  /* ---------------- search ---------------- */
+
+  void _openSearch() {
+    setState(() => _searching = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _searchFocus.requestFocus();
+      _searchInput.selection = TextSelection(baseOffset: 0, extentOffset: _searchInput.text.length);
+    });
+  }
+
+  void _closeSearch() {
+    _searchDebounce?.cancel();
+    _searchInput.clear();
+    _search.clear();
+    _jumpedTo = null;
+    setState(() => _searching = false);
+    if (_keyboardFirst) _focus.requestFocus();
+  }
+
+  void _onSearchInput(String text) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () => _search.search(text));
+  }
+
+  /// Enter = next older match, Shift+Enter = newer, Esc = close search.
+  KeyEventResult _onSearchKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+      if (_searchDebounce?.isActive ?? false) {
+        _searchDebounce!.cancel();
+        _search.search(_searchInput.text);
+      } else if (HardwareKeyboard.instance.isShiftPressed) {
+        _search.newer();
+      } else {
+        _search.older();
+      }
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.escape) {
+      _closeSearch();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// Scrolls to the selected search result, loading older history first if needed.
+  Future<void> _onSearchChanged() async {
+    setState(() {}); // highlight / counter
+    final hit = _search.current;
+    if (hit == null || hit.id == _jumpedTo) return;
+    _jumpedTo = hit.id;
+    final found = await _room.ensureLoaded(hit.id);
+    if (!mounted || _search.current?.id != hit.id) return;
+    if (!found) {
+      showMessage(context, 'This message is no longer available');
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_listController.isAttached || !_scroll.hasClients) return;
+      final idx = _room.messages.indexWhere((m) => m.id == hit.id);
+      if (idx < 0) return;
+      _listController.animateToItem(
+        index: _room.messages.length - 1 - idx, // the list is reversed (newest at the bottom)
+        scrollController: _scroll,
+        alignment: 0.5,
+        duration: (d) => Duration(milliseconds: (200 + d / 8).clamp(200, 700).round()),
+        curve: (_) => Curves.easeInOutCubic,
+      );
+    });
+  }
+
+  PreferredSizeWidget _searchBar(ThemeData theme) {
+    final label = _search.label;
+    return AppBar(
+      automaticallyImplyLeading: false,
+      leading: IconButton(tooltip: 'Close search', icon: const Icon(Icons.arrow_back), onPressed: _closeSearch),
+      titleSpacing: 0,
+      title: TextField(
+        controller: _searchInput,
+        focusNode: _searchFocus,
+        onChanged: _onSearchInput,
+        textInputAction: TextInputAction.search,
+        decoration: const InputDecoration(
+          hintText: 'Search in this chat',
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+        ),
+      ),
+      bottom: _search.loading
+          ? const PreferredSize(preferredSize: Size.fromHeight(2), child: LinearProgressIndicator(minHeight: 2))
+          : null,
+      actions: [
+        if (label != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Text(
+              label,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: _search.error != null ? theme.colorScheme.error : theme.colorScheme.outline,
+              ),
+            ),
+          ),
+        IconButton(
+          tooltip: 'Older match (Enter)',
+          icon: const Icon(Icons.keyboard_arrow_up),
+          onPressed: _search.hasOlder ? _search.older : null,
+        ),
+        IconButton(
+          tooltip: 'Newer match (Shift+Enter)',
+          icon: const Icon(Icons.keyboard_arrow_down),
+          onPressed: _search.hasNewer ? _search.newer : null,
+        ),
+        const SizedBox(width: 4),
+      ],
+    );
   }
 
   bool _closing = false;
@@ -106,10 +243,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       } else {
         Navigator.of(context).popUntil((r) => r.isFirst);
       }
-      messenger.showSnackBar(const SnackBar(
-        behavior: SnackBarBehavior.floating,
-        content: Text('You are no longer a member of this group'),
-      ));
+      messenger.showSnackBar(
+        const SnackBar(behavior: SnackBarBehavior.floating, content: Text('You are no longer a member of this group')),
+      );
     });
   }
 
@@ -124,6 +260,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   KeyEventResult _onComposerKey(FocusNode node, KeyEvent event) {
     if (!_keyboardFirst || event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
+    final hw = HardwareKeyboard.instance;
+    if (key == LogicalKeyboardKey.keyF && (hw.isControlPressed || hw.isMetaPressed)) {
+      _openSearch(); // Ctrl/Cmd+F searches the chat instead of the page
+      return KeyEventResult.handled;
+    }
     if ((key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) &&
         !HardwareKeyboard.instance.isShiftPressed) {
       if (_input.text.trim().isNotEmpty) _send();
@@ -393,112 +534,130 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       status = formatLastSeen(chat.peer!);
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: !widget.embedded,
-        titleSpacing: widget.embedded ? 16 : 0,
-        title: chat == null
-            ? const Text('Chat')
-            : InkWell(
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => chat.isGroup
-                        ? GroupInfoScreen(chatId: chat.id)
-                        : UserProfileScreen(userId: chat.peer!.id, initial: chat.peer),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    ChatAvatar(chat: chat, radius: 20, showOnline: connected),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(chat.name, overflow: TextOverflow.ellipsis),
-                          Text(
-                            status,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: connected && (typing != null || online)
-                                  ? theme.colorScheme.primary
-                                  : theme.colorScheme.outline,
-                              fontStyle: typing != null ? FontStyle.italic : null,
-                            ),
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyF, control: true): _openSearch,
+        const SingleActivator(LogicalKeyboardKey.keyF, meta: true): _openSearch,
+      },
+      child: Scaffold(
+        appBar: _searching
+            ? _searchBar(theme)
+            : AppBar(
+                automaticallyImplyLeading: !widget.embedded,
+                titleSpacing: widget.embedded ? 16 : 0,
+                title: chat == null
+                    ? const Text('Chat')
+                    : InkWell(
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => chat.isGroup
+                                ? GroupInfoScreen(chatId: chat.id)
+                                : UserProfileScreen(userId: chat.peer!.id, initial: chat.peer),
                           ),
-                        ],
+                        ),
+                        child: Row(
+                          children: [
+                            ChatAvatar(chat: chat, radius: 20, showOnline: connected),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(chat.name, overflow: TextOverflow.ellipsis),
+                                  Text(
+                                    status,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: connected && (typing != null || online)
+                                          ? theme.colorScheme.primary
+                                          : theme.colorScheme.outline,
+                                      fontStyle: typing != null ? FontStyle.italic : null,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                actions: [
+                  IconButton(
+                    tooltip: 'Search in chat (Ctrl+F)',
+                    icon: const Icon(Icons.search),
+                    onPressed: _openSearch,
+                  ),
+                  if (chat != null)
+                    PopupMenuButton<String>(
+                      onSelected: (v) async {
+                        if (v == 'info') {
+                          Navigator.of(
+                            context,
+                          ).push(MaterialPageRoute(builder: (_) => GroupInfoScreen(chatId: chat.id)));
+                          return;
+                        }
+                        try {
+                          if (v == 'mute') await chats.update(chat.id, muted: !chat.muted);
+                          if (v == 'archive') {
+                            await chats.update(chat.id, archived: !chat.archived);
+                            if (context.mounted) {
+                              showMessage(context, chat.archived ? 'Chat archived' : 'Chat unarchived', error: false);
+                            }
+                          }
+                        } catch (e) {
+                          if (context.mounted) showMessage(context, e);
+                        }
+                      },
+                      itemBuilder: (_) => [
+                        if (chat.isGroup) const PopupMenuItem(value: 'info', child: Text('Group info')),
+                        PopupMenuItem(
+                          value: 'mute',
+                          child: Text(chat.muted ? 'Unmute notifications' : 'Mute notifications'),
+                        ),
+                        PopupMenuItem(value: 'archive', child: Text(chat.archived ? 'Unarchive chat' : 'Archive chat')),
+                      ],
                     ),
+                  if (widget.embedded)
+                    IconButton(
+                      tooltip: 'Close chat',
+                      icon: const Icon(Icons.close),
+                      onPressed: () => ChatNavigation.close(widget.chatId),
+                    ),
+                ],
+              ),
+        body: Column(
+          children: [
+            ConnectionBanner(connected: connected),
+            Expanded(
+              child: ListenableBuilder(listenable: _room, builder: (context, _) => _messageList(context)),
+            ),
+            if (_compressing)
+              Container(
+                color: theme.colorScheme.surfaceContainerHigh,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: const Row(
+                  children: [
+                    SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                    SizedBox(width: 12),
+                    Text('Compressing video…'),
                   ],
                 ),
               ),
-        actions: [
-          if (chat != null)
-            PopupMenuButton<String>(
-              onSelected: (v) async {
-                if (v == 'info') {
-                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => GroupInfoScreen(chatId: chat.id)));
-                  return;
-                }
-                try {
-                  if (v == 'mute') await chats.update(chat.id, muted: !chat.muted);
-                  if (v == 'archive') {
-                    await chats.update(chat.id, archived: !chat.archived);
-                    if (context.mounted) {
-                      showMessage(context, chat.archived ? 'Chat archived' : 'Chat unarchived', error: false);
-                    }
-                  }
-                } catch (e) {
-                  if (context.mounted) showMessage(context, e);
-                }
+            if (_editing != null) _editBanner(theme),
+            _Composer(
+              controller: _input,
+              focusNode: _focus,
+              editing: _editing != null,
+              onChanged: (v) {
+                setState(() {});
+                if (_editing == null) _room.onComposerChanged(v);
               },
-              itemBuilder: (_) => [
-                if (chat.isGroup) const PopupMenuItem(value: 'info', child: Text('Group info')),
-                PopupMenuItem(value: 'mute', child: Text(chat.muted ? 'Unmute notifications' : 'Mute notifications')),
-                PopupMenuItem(value: 'archive', child: Text(chat.archived ? 'Unarchive chat' : 'Archive chat')),
-              ],
+              onSend: _send,
+              onAttach: _attach,
+              onVoice: (file, durationMs) => _room.sendMedia('audio', file, meta: {'durationMs': durationMs}),
             ),
-          if (widget.embedded)
-            IconButton(
-              tooltip: 'Close chat',
-              icon: const Icon(Icons.close),
-              onPressed: () => ChatNavigation.close(widget.chatId),
-            ),
-        ],
-      ),
-      body: Column(
-        children: [
-          ConnectionBanner(connected: connected),
-          Expanded(
-            child: ListenableBuilder(listenable: _room, builder: (context, _) => _messageList(context)),
-          ),
-          if (_compressing)
-            Container(
-              color: theme.colorScheme.surfaceContainerHigh,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: const Row(
-                children: [
-                  SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-                  SizedBox(width: 12),
-                  Text('Compressing video…'),
-                ],
-              ),
-            ),
-          if (_editing != null) _editBanner(theme),
-          _Composer(
-            controller: _input,
-            focusNode: _focus,
-            editing: _editing != null,
-            onChanged: (v) {
-              setState(() {});
-              if (_editing == null) _room.onComposerChanged(v);
-            },
-            onSend: _send,
-            onAttach: _attach,
-            onVoice: (file, durationMs) => _room.sendMedia('audio', file, meta: {'durationMs': durationMs}),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -528,8 +687,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   );
 
   static const _nameColors = [
-    Color(0xFFE53935), Color(0xFF8E24AA), Color(0xFF3949AB), Color(0xFF00897B),
-    Color(0xFFF4511E), Color(0xFF6D4C41), Color(0xFF1E88E5), Color(0xFF43A047),
+    Color(0xFFE53935),
+    Color(0xFF8E24AA),
+    Color(0xFF3949AB),
+    Color(0xFF00897B),
+    Color(0xFFF4511E),
+    Color(0xFF6D4C41),
+    Color(0xFF1E88E5),
+    Color(0xFF43A047),
   ];
   Color _nameColor(String userId) => _nameColors[userId.codeUnits.fold<int>(0, (a, b) => a + b) % _nameColors.length];
 
@@ -541,7 +706,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final formerNames = <String, String>{};
     if (chat?.isGroup ?? false) {
       for (final m in msgs.where((m) => m.isSystem)) {
-        for (final (idKey, nameKey) in const [('actorId', 'actorName'), ('targetId', 'targetName'), ('invitedById', 'invitedByName')]) {
+        for (final (idKey, nameKey) in const [
+          ('actorId', 'actorName'),
+          ('targetId', 'targetName'),
+          ('invitedById', 'invitedByName'),
+        ]) {
           final id = m.meta[idKey], name = m.meta[nameKey];
           if (id is String && name is String) formerNames[id] = name;
         }
@@ -561,7 +730,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ),
       );
     }
-    return ListView.builder(
+    final highlight = _searching && _search.query.isNotEmpty ? _search.query : null;
+    final focusedId = _searching ? _search.current?.id : null;
+    return SuperListView.builder(
+      listController: _listController,
       controller: _scroll,
       reverse: true,
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -579,21 +751,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final newDay = prev == null || !DateUtils.isSameDay(prev.createdAt, m.createdAt);
         final mine = m.senderId == me;
         if (m.isSystem) {
-          return Column(children: [
-            if (newDay) _DayChip(date: m.createdAt),
-            _SystemChip(text: systemMessageText(m, myId: me)),
-          ]);
+          return Column(
+            children: [
+              if (newDay) _DayChip(date: m.createdAt),
+              _SystemChip(text: systemMessageText(m, myId: me)),
+            ],
+          );
         }
         // Groups: name above the first message of a run from the same person.
-        final showSender = chat != null &&
-            chat.isGroup &&
-            !mine &&
-            (newDay || prev.isSystem || prev.senderId != m.senderId);
+        final showSender =
+            chat != null && chat.isGroup && !mine && (newDay || prev.isSystem || prev.senderId != m.senderId);
         final sender = showSender ? chat.member(m.senderId) : null;
         return Column(
           children: [
             if (newDay) _DayChip(date: m.createdAt),
             MessageBubble(
+              highlight: highlight,
+              focused: m.id != null && m.id == focusedId,
               senderName: showSender ? (sender?.username ?? formerNames[m.senderId] ?? 'Former member') : null,
               senderColor: showSender ? _nameColor(m.senderId ?? '') : null,
               key: ValueKey(m.clientId),
