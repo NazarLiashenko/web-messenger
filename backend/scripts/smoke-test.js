@@ -172,6 +172,88 @@ r = await api('GET', '/api/chats', { token: alice.token });
 assert.equal(r.chats[0].lastMessage.type, 'image');
 step('archive / unarchive / mute + chat list');
 
+/* ---------------- group chats ---------------- */
+const carol = await createUser('carol');
+const sc = io(API, { auth: { token: carol.token }, transports: ['websocket'] });
+await waitFor(sc, 'connect').catch(() => {});
+
+r = await api('POST', '/api/groups', { token: alice.token, body: { title: '  ' } });
+assert.equal(r.error.code, 'VALIDATION_ERROR');
+const groupInviteEvt = waitFor(sb, 'invite:new', (i) => i.kind === 'group');
+r = await api('POST', '/api/groups', { token: alice.token, body: { title: 'Weekend trip', memberIds: [bob.id] } });
+assert.equal(r.status, 201, JSON.stringify(r));
+const groupId = r.chat.id;
+assert.equal(r.chat.kind, 'group');
+assert.equal(r.chat.myRole, 'owner');
+assert.equal(r.chat.memberCount, 1); // bob is only invited
+assert.equal(r.invites.length, 1);
+const gInv = await groupInviteEvt;
+assert.equal(gInv.group.title, 'Weekend trip');
+r = await api('POST', `/api/groups/${groupId}/invites`, { token: alice.token, body: { userId: bob.id } });
+assert.equal(r.error.code, 'INVITE_ALREADY_SENT');
+r = await api('GET', `/api/chats/${groupId}/messages`, { token: bob.token });
+assert.equal(r.status, 404); // not a member yet
+const joinedEvt = waitFor(sa, 'message:new', ({ message }) => message.type === 'system' && message.meta.event === 'joined');
+const bobGroupChat = waitFor(sb, 'chat:new', (c) => c.id === groupId);
+r = await api('POST', `/api/invites/${gInv.id}/accept`, { token: bob.token });
+assert.equal(r.chat.kind, 'group');
+assert.equal(r.chat.memberCount, 2);
+await Promise.all([joinedEvt, bobGroupChat]);
+step('group: create → invite (realtime) → accept → member');
+
+// bob (a member) invites carol, carol declines, then is invited again and accepts
+r = await api('POST', `/api/groups/${groupId}/invites`, { token: bob.token, body: { userId: carol.id } });
+assert.equal(r.status, 201, JSON.stringify(r));
+r = await api('POST', `/api/invites/${r.invite.id}/decline`, { token: carol.token });
+assert.equal(r.invite.status, 'declined');
+r = await api('POST', `/api/groups/${groupId}/invites`, { token: alice.token, body: { userId: carol.id } });
+r = await api('POST', `/api/invites/${r.invite.id}/accept`, { token: carol.token });
+assert.equal(r.chat.memberCount, 3);
+r = await api('POST', `/api/groups/${groupId}/invites`, { token: alice.token, body: { userId: carol.id } });
+assert.equal(r.error.code, 'ALREADY_MEMBER');
+step('group: any member can invite; decline; re-invite; already-member check');
+
+const toBob = waitFor(sb, 'message:new', ({ message }) => message.text === 'Hi group');
+const toCarol = waitFor(sc, 'message:new', ({ message }) => message.text === 'Hi group');
+r = await api('POST', `/api/chats/${groupId}/messages`, { token: alice.token, body: { clientId: 'g1', type: 'text', text: 'Hi group' } });
+assert.equal(r.status, 201);
+await Promise.all([toBob, toCarol]);
+r = await api('GET', '/api/chats', { token: carol.token });
+assert.equal(r.chats.find((c) => c.id === groupId).unreadCount, 1);
+await api('POST', `/api/chats/${groupId}/read`, { token: bob.token });
+r = await api('GET', '/api/chats', { token: carol.token });
+assert.equal(r.chats.find((c) => c.id === groupId).unreadCount, 1); // bob reading does not clear carol's counter
+await api('POST', `/api/chats/${groupId}/read`, { token: carol.token });
+r = await api('GET', '/api/chats', { token: carol.token });
+assert.equal(r.chats.find((c) => c.id === groupId).unreadCount, 0);
+step('group messages reach every member; per-member unread counters');
+
+r = await api('PATCH', `/api/groups/${groupId}`, { token: bob.token, body: { title: 'Hacked' } });
+assert.equal(r.status, 403);
+const renamed = waitFor(sc, 'chat:updated', (c) => c.id === groupId && c.title === 'Trip 🏕');
+r = await api('PATCH', `/api/groups/${groupId}`, { token: alice.token, body: { title: 'Trip 🏕' } });
+assert.equal(r.chat.title, 'Trip 🏕');
+await renamed;
+r = await api('DELETE', `/api/groups/${groupId}/members/${alice.id}`, { token: bob.token });
+assert.equal(r.status, 403);
+const removedEvt = waitFor(sc, 'chat:removed', (d) => d.chatId === groupId);
+r = await api('DELETE', `/api/groups/${groupId}/members/${carol.id}`, { token: alice.token });
+assert.equal(r.chat.memberCount, 2);
+await removedEvt;
+r = await api('GET', `/api/chats/${groupId}/messages`, { token: carol.token });
+assert.equal(r.status, 404);
+r = await api('POST', `/api/groups/${groupId}/leave`, { token: alice.token });
+assert.equal(r.ok, true);
+r = await api('GET', `/api/groups/${groupId}`, { token: bob.token });
+assert.equal(r.chat.myRole, 'owner'); // ownership passed on
+assert.equal(r.chat.memberCount, 1);
+r = await api('GET', `/api/chats/${groupId}/messages?limit=100`, { token: bob.token });
+const events = r.messages.filter((m) => m.type === 'system').map((m) => m.meta.event);
+assert.deepEqual(events, ['created', 'joined', 'joined', 'renamed', 'removed', 'left']);
+assert.equal(r.messages.find((m) => m.text === 'Hi group').senderId, alice.id); // sender kept after leaving
+step('group: rename + remove (owner only), leave → ownership passes on, history keeps senders');
+sc.close();
+
 r = await api('POST', '/api/auth/refresh', { body: { refreshToken: alice.refresh } });
 assert.ok(r.tokens.accessToken);
 const t1 = r.tokens.refreshToken;

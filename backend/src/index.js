@@ -11,6 +11,7 @@ import authRoutes from './routes/auth.js';
 import meRoutes from './routes/me.js';
 import userRoutes from './routes/users.js';
 import inviteRoutes from './routes/invites.js';
+import groupRoutes from './routes/groups.js';
 import mediaRoutes from './routes/media.js';
 import { chatsRouter, messagesRouter } from './routes/chats.js';
 
@@ -32,6 +33,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/me', meRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/invites', inviteRoutes);
+app.use('/api/groups', groupRoutes);
 app.use('/api/chats', chatsRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/media', mediaRoutes);

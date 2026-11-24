@@ -7,7 +7,8 @@ import { getChatMemberIds, getContactIds, markDelivered } from './services/chats
  * Real-time channel (Socket.IO).
  * Server -> client events:
  *   message:new, message:updated, message:status, typing, presence,
- *   chat:new, chat:updated, invite:new, invite:updated, user:updated
+ *   chat:new, chat:updated, chat:removed (left / removed from a group),
+ *   invite:new, invite:updated, user:updated
  * Client -> server events:
  *   typing {chatId, isTyping}, message:delivered {messageIds}
  */

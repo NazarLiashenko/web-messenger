@@ -134,12 +134,15 @@ chatsRouter.post('/:id/messages', async (req, res) => {
   const recipients = memberIds.filter((uid) => uid !== req.userId && !isOnline(uid));
   if (recipients.length) {
     const sender = await query('SELECT username_enc FROM users WHERE id=$1', [req.userId]);
+    const senderName = decrypt(sender.rows[0].username_enc);
+    const chat = (await query('SELECT kind, title_enc FROM chats WHERE id=$1', [chatId])).rows[0];
+    const group = chat.kind === 'group';
     for (const uid of recipients) {
       const m = await query('SELECT muted FROM chat_members WHERE chat_id=$1 AND member_key=$2', [chatId, userKey(uid)]);
       if (m.rows[0]?.muted) continue;
       pushToUser(uid, {
-        title: decrypt(sender.rows[0].username_enc),
-        body: messagePreview(message),
+        title: group ? decrypt(chat.title_enc) : senderName,
+        body: group ? `${senderName}: ${messagePreview(message)}` : messagePreview(message),
         data: { type: 'message', chatId },
       });
     }
