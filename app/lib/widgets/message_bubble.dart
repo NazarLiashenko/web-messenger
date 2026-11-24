@@ -41,7 +41,11 @@ class MessageBubble extends StatelessWidget {
     this.senderColor,
     this.highlight,
     this.focused = false,
+    this.pollBuilder,
   });
+
+  /// Builds the poll body for `poll` messages (given the bubble's text colour).
+  final Widget Function(Color foreground)? pollBuilder;
 
   /// Search text to highlight inside the message (case-insensitive).
   final String? highlight;
@@ -99,8 +103,9 @@ class MessageBubble extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (hasMedia) _media(context, m, fg),
-          if (m.text != null && m.text!.isNotEmpty)
+          if (m.isPoll && pollBuilder != null) pollBuilder!(fg),
+          if (hasMedia && !m.isPoll) _media(context, m, fg),
+          if (m.text != null && m.text!.isNotEmpty && !(m.isPoll && pollBuilder != null))
             Padding(
               padding: EdgeInsets.only(top: hasMedia ? 6 : 0),
               child: highlight == null || highlight!.isEmpty

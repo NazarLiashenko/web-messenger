@@ -22,6 +22,7 @@ import '../state/chat_search_controller.dart';
 import '../state/chats_controller.dart';
 import '../widgets/common.dart';
 import '../widgets/message_bubble.dart';
+import '../widgets/poll_card.dart';
 import 'group_screens.dart';
 import 'user_profile_screen.dart';
 
@@ -336,13 +337,35 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _closePoll(Message m) async {
+    try {
+      await _room.closePoll(m);
+    } catch (e) {
+      if (mounted) showMessage(context, e);
+    }
+  }
+
+  Future<void> _createPoll() async {
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (_) => CreatePollDialog(
+        onCreate: (q, options, anonymous, multiple) =>
+            _room.createPoll(q, options, anonymous: anonymous, multiple: multiple),
+      ),
+    );
+    if (created == true && _scroll.hasClients) {
+      _scroll.animateTo(0, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+    }
+  }
+
   /// Message actions: a context menu at the pointer (right click) or a bottom sheet (long press).
   Future<void> _messageMenu(Message m, bool mine, {Offset? at}) async {
     final canEdit = mine && m.type == 'text' && m.id != null && !m.isPending;
     final canDelete = mine && m.id != null && !m.isPending;
     final canCopy = m.text?.isNotEmpty ?? false;
+    final canClosePoll = m.isPoll && m.poll != null && m.poll!.creatorIsMe && !m.poll!.closed && !m.isDeleted;
     if (at != null) {
-      if (!canCopy && !canEdit && !canDelete) return;
+      if (!canCopy && !canEdit && !canDelete && !canClosePoll) return;
       final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
       final choice = await showMenu<String>(
         context: context,
@@ -352,6 +375,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             const PopupMenuItem(
               value: 'copy',
               child: ListTile(leading: Icon(Icons.copy), title: Text('Copy text')),
+            ),
+          if (canClosePoll)
+            const PopupMenuItem(
+              value: 'close-poll',
+              child: ListTile(leading: Icon(Icons.lock_outline), title: Text('Close poll')),
             ),
           if (canEdit)
             const PopupMenuItem(
@@ -377,6 +405,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           _startEdit(m);
         case 'delete':
           _delete(m);
+        case 'close-poll':
+          _closePoll(m);
       }
       return;
     }
@@ -395,6 +425,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   Clipboard.setData(ClipboardData(text: m.text!));
                   Navigator.pop(sheet);
                   showMessage(context, 'Copied', error: false);
+                },
+              ),
+            if (canClosePoll)
+              ListTile(
+                leading: const Icon(Icons.lock_outline),
+                title: const Text('Close poll'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _closePoll(m);
                 },
               ),
             if (canEdit)
@@ -482,12 +521,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 title: const Text('Record a video'),
                 onTap: () => Navigator.pop(sheet, 'record'),
               ),
+            if (_chats.byId(widget.chatId)?.isGroup ?? false)
+              ListTile(
+                leading: const Icon(Icons.poll_outlined),
+                title: const Text('Poll'),
+                onTap: () => Navigator.pop(sheet, 'poll'),
+              ),
             const Padding(padding: EdgeInsets.fromLTRB(16, 4, 16, 12), child: Text('Images and videos up to 20 MB')),
           ],
         ),
       ),
     );
     if (choice == null) return;
+    if (choice == 'poll') {
+      _createPoll();
+      return;
+    }
     try {
       if (choice == 'image' || choice == 'camera') {
         final picked = await MediaPicker.pickImage(choice == 'camera' ? ImageSource.camera : ImageSource.gallery);
@@ -767,6 +816,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             if (newDay) _DayChip(date: m.createdAt),
             MessageBubble(
               highlight: highlight,
+              pollBuilder: m.isPoll && m.poll != null && !m.isDeleted
+                  ? (fg) => PollCard(
+                        key: ValueKey('poll-${m.id}'),
+                        question: m.text ?? '',
+                        poll: m.poll!,
+                        foreground: fg,
+                        onVote: (options) => _room.vote(m, options),
+                        nameOf: (id) => id == me ? 'You' : (chat?.member(id)?.username ?? formerNames[id] ?? 'Member'),
+                      )
+                  : null,
               focused: m.id != null && m.id == focusedId,
               senderName: showSender ? (sender?.username ?? formerNames[m.senderId] ?? 'Former member') : null,
               senderColor: showSender ? _nameColor(m.senderId ?? '') : null,
@@ -1028,4 +1087,140 @@ class _BlinkingDotState extends State<_BlinkingDot> with SingleTickerProviderSta
       decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
     ),
   );
+}
+
+/* ============================== CREATE POLL ============================== */
+
+class CreatePollDialog extends StatefulWidget {
+  const CreatePollDialog({super.key, required this.onCreate});
+  final Future<void> Function(String question, List<String> options, bool anonymous, bool multiple) onCreate;
+
+  @override
+  State<CreatePollDialog> createState() => _CreatePollDialogState();
+}
+
+class _CreatePollDialogState extends State<CreatePollDialog> {
+  static const _maxOptions = 10;
+  final _question = TextEditingController();
+  final List<TextEditingController> _options = [TextEditingController(), TextEditingController()];
+  bool _anonymous = true;
+  bool _multiple = false;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _question.dispose();
+    for (final c in _options) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final q = _question.text.trim();
+    final options = _options.map((c) => c.text.trim()).where((t) => t.isNotEmpty).toList();
+    String? error;
+    if (q.isEmpty) {
+      error = 'Write a question';
+    } else if (options.length < 2) {
+      error = 'Add at least 2 options';
+    } else if (options.map((o) => o.toLowerCase()).toSet().length != options.length) {
+      error = 'Options must be different';
+    }
+    if (error != null) {
+      setState(() => _error = error);
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.onCreate(q, options, _anonymous, _multiple);
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) setState(() => _error = e is ApiException ? e.message : e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('New poll'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            TextField(
+              controller: _question,
+              autofocus: true,
+              maxLength: 300,
+              minLines: 1,
+              maxLines: 3,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(labelText: 'Question', counterText: ''),
+            ),
+            const SizedBox(height: 16),
+            Text('Options', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            for (var i = 0; i < _options.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: TextField(
+                  controller: _options[i],
+                  maxLength: 100,
+                  textInputAction: i == _options.length - 1 ? TextInputAction.done : TextInputAction.next,
+                  decoration: InputDecoration(
+                    hintText: 'Option ${i + 1}',
+                    counterText: '',
+                    isDense: true,
+                    suffixIcon: _options.length > 2
+                        ? IconButton(
+                            tooltip: 'Remove option',
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () => setState(() => _options.removeAt(i).dispose()),
+                          )
+                        : null,
+                  ),
+                ),
+              ),
+            if (_options.length < _maxOptions)
+              TextButton.icon(
+                onPressed: () => setState(() => _options.add(TextEditingController())),
+                icon: const Icon(Icons.add),
+                label: const Text('Add option'),
+              ),
+            const Divider(),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _anonymous,
+              onChanged: (v) => setState(() => _anonymous = v),
+              title: const Text('Anonymous voting'),
+              subtitle: Text(_anonymous ? 'Nobody sees who voted for what' : 'Members can see who voted for each option'),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _multiple,
+              onChanged: (v) => setState(() => _multiple = v),
+              title: const Text('Multiple answers'),
+            ),
+            if (_error != null) Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+          ]),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: _busy ? null : _submit,
+          child: _busy
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Create'),
+        ),
+      ],
+    );
+  }
 }

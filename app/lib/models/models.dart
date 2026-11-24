@@ -149,7 +149,7 @@ class Message {
   final String clientId;
   final String chatId;
   final String? senderId;
-  final String type; // text | image | video | audio | system (group events)
+  final String type; // text | image | video | audio | poll | system (group events)
   String? text;
   MediaInfo? media;
   Map<String, dynamic> meta;
@@ -158,12 +158,14 @@ class Message {
   DateTime? deletedAt;
   MessageStatus status;
   LocalAttachment? local;
+  Poll? poll; // type == 'poll'
   double? uploadProgress;
   String? error;
   bool retryOnReconnect = false; // failed because of the network: resend automatically
 
   bool get isDeleted => deletedAt != null;
   bool get isSystem => type == 'system';
+  bool get isPoll => type == 'poll';
   bool get isPending => status == MessageStatus.sending || status == MessageStatus.failed;
   int? get durationMs => (meta['durationMs'] as num?)?.toInt();
 
@@ -180,7 +182,7 @@ class Message {
         editedAt: _date(j['editedAt']),
         deletedAt: _date(j['deletedAt']),
         status: _status(j['status'] as String?),
-      );
+      )..poll = j['poll'] is Map ? Poll.fromJson(Map<String, dynamic>.from(j['poll'] as Map)) : null;
 
   /// Status updates only move forward (sent -> delivered -> read).
   void upgradeStatus(MessageStatus s) {
@@ -239,6 +241,55 @@ class Chat {
         unreadCount: (j['unreadCount'] as num?)?.toInt() ?? 0,
         lastMessage: j['lastMessage'] is Map ? Message.fromJson(Map<String, dynamic>.from(j['lastMessage'] as Map)) : null,
         lastActivityAt: _date(j['lastActivityAt']) ?? DateTime.now(),
+      );
+}
+
+class PollOption {
+  PollOption({required this.text, required this.votes, this.voterIds});
+  final String text;
+  final int votes;
+  final List<String>? voterIds; // null for anonymous polls
+
+  factory PollOption.fromJson(Map<String, dynamic> j) => PollOption(
+        text: j['text'] as String? ?? '',
+        votes: (j['votes'] as num?)?.toInt() ?? 0,
+        voterIds: (j['voterIds'] as List?)?.cast<String>(),
+      );
+}
+
+/// A poll as seen by the current user (their own choices in [myVotes]).
+class Poll {
+  Poll({
+    required this.id,
+    required this.options,
+    required this.anonymous,
+    required this.multiple,
+    required this.closed,
+    required this.creatorIsMe,
+    required this.totalVoters,
+    required this.myVotes,
+  });
+
+  final String id;
+  final List<PollOption> options;
+  final bool anonymous;
+  final bool multiple;
+  final bool closed;
+  final bool creatorIsMe;
+  final int totalVoters;
+  final List<int> myVotes;
+
+  bool get voted => myVotes.isNotEmpty;
+
+  factory Poll.fromJson(Map<String, dynamic> j) => Poll(
+        id: j['id'] as String,
+        options: (j['options'] as List).map((o) => PollOption.fromJson(Map<String, dynamic>.from(o as Map))).toList(),
+        anonymous: j['anonymous'] as bool? ?? true,
+        multiple: j['multiple'] as bool? ?? false,
+        closed: j['closed'] as bool? ?? false,
+        creatorIsMe: j['creatorIsMe'] as bool? ?? false,
+        totalVoters: (j['totalVoters'] as num?)?.toInt() ?? 0,
+        myVotes: (j['myVotes'] as List? ?? const []).map((e) => (e as num).toInt()).toList(),
       );
 }
 

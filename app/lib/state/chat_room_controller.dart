@@ -199,6 +199,7 @@ class ChatRoomController extends ChangeNotifier {
       final existing = messages[i];
       // Keep the local bytes so the image doesn't flicker while the network copy loads.
       server.local = existing.local;
+      if (!server.isDeleted) server.poll ??= existing.poll;
       if (existing.status.index > server.status.index && !existing.isPending) server.status = existing.status;
       messages[i] = server;
     } else {
@@ -206,6 +207,41 @@ class ChatRoomController extends ChangeNotifier {
       messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
     }
     chats.onLocalMessage(server);
+    _notify();
+  }
+
+  /* ---------------- polls ---------------- */
+
+  Future<void> createPoll(String question, List<String> options, {required bool anonymous, required bool multiple}) async {
+    final data = await api.post('/api/chats/$chatId/polls', {
+      'clientId': _uuid.v4(),
+      'question': question,
+      'options': options,
+      'anonymous': anonymous,
+      'multiple': multiple,
+    });
+    _applyServer(Message.fromJson(Map<String, dynamic>.from(data['message'] as Map)));
+  }
+
+  /// Votes / changes the vote; an empty list retracts it. Rolls back on failure.
+  Future<void> vote(Message m, List<int> options) async {
+    final poll = m.poll;
+    if (poll == null) return;
+    try {
+      final data = options.isEmpty
+          ? await api.delete('/api/polls/${poll.id}/vote')
+          : await api.put('/api/polls/${poll.id}/vote', {'options': options});
+      m.poll = Poll.fromJson(Map<String, dynamic>.from(data['poll'] as Map));
+    } finally {
+      _notify();
+    }
+  }
+
+  Future<void> closePoll(Message m) async {
+    final poll = m.poll;
+    if (poll == null) return;
+    final data = await api.post('/api/polls/${poll.id}/close');
+    m.poll = Poll.fromJson(Map<String, dynamic>.from(data['poll'] as Map));
     _notify();
   }
 
@@ -297,6 +333,12 @@ class ChatRoomController extends ChangeNotifier {
         if (m.chatId != chatId) return;
         _applyServer(m);
         if (m.senderId != myId) _scheduleRead();
+      case 'poll:updated':
+        if (data['chatId'] != chatId || data['poll'] is! Map) return;
+        final m = messages.where((m) => m.id == data['messageId']).firstOrNull;
+        if (m == null) return;
+        m.poll = Poll.fromJson(Map<String, dynamic>.from(data['poll'] as Map));
+        _notify();
       case 'message:status':
         if (data['chatId'] != chatId) return;
         final ids = (data['messageIds'] as List).cast<String>().toSet();

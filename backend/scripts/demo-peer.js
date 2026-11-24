@@ -80,6 +80,13 @@ socket.on('message:new', async ({ message }) => {
   console.log(`[peer] got ${message.type}: ${message.text ?? ''}`);
   await new Promise((r) => setTimeout(r, 1500));
   await api('POST', `/api/chats/${message.chatId}/read`, { token });
+  if (message.type === 'poll' && message.poll && !message.poll.closed) {
+    // Vote for a random option so there is something to see in the results.
+    const choice = Math.floor(Math.random() * message.poll.options.length);
+    await api('PUT', `/api/polls/${message.poll.id}/vote`, { token, body: { options: [choice] } });
+    console.log(`[peer] voted "${message.poll.options[choice].text}"`);
+    return;
+  }
   socket.emit('typing', { chatId: message.chatId, isTyping: true });
   await new Promise((r) => setTimeout(r, 2500));
   socket.emit('typing', { chatId: message.chatId, isTyping: false });

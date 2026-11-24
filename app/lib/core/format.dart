@@ -49,7 +49,7 @@ String formatBytes(int bytes) {
 String messagePreview(Message m, {String? myId}) {
   if (m.isSystem) return systemMessageText(m, myId: myId);
   if (m.isDeleted) return 'Message deleted';
-  const labels = {'image': '📷 Photo', 'video': '🎬 Video', 'audio': '🎤 Voice message'};
+  const labels = {'image': '📷 Photo', 'video': '🎬 Video', 'audio': '🎤 Voice message', 'poll': '📊 Poll'};
   if (m.type == 'text') return m.text ?? '';
   final label = labels[m.type] ?? 'Attachment';
   return (m.text?.isNotEmpty ?? false) ? '$label · ${m.text}' : label;
