@@ -4,7 +4,7 @@ A full-stack, end-to-end-tested messenger that runs **in the browser** and on **
 **Flutter** codebase, backed by a **Node.js** API with **PostgreSQL**, realtime **WebSockets** and
 **encryption at rest** for all sensitive data.
 
-**Live app: <https://DEPLOY-URL>** — open it in any modern browser, sign up, done.
+**Live app: <https://web-messenger-1n4v.onrender.com>** — open it in any modern browser, sign up, done.
 
 <p>
 Group chats with invitations · search inside messages with highlighting · polls in groups ·
@@ -38,7 +38,7 @@ the same Flutter code and the same database schema (extended with migrations), n
 
 ### Option 1 — the deployed app (nothing to install)
 
-1. Open **<https://DEPLOY-URL>**.
+1. Open **<https://web-messenger-1n4v.onrender.com>**.
    The server runs on a free plan and sleeps after 15 minutes without visitors: the **first load can take ~50 s**.
 2. **Sign up** with a real email address — the 6-digit code arrives by email (check *Spam*).
 3. Open a second browser (or a private window) and sign up a second account, so you can chat with yourself.
