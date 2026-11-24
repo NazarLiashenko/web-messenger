@@ -10,15 +10,21 @@ ARG FLUTTER_VERSION=3.50.0
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git curl unzip xz-utils ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+# Build as a normal user: as root, tar tries to keep the archive's file owners, which build sandboxes
+# such as Render's refuse ("Cannot change ownership ... Invalid argument").
+ENV TAR_OPTIONS=--no-same-owner
+RUN useradd --create-home --uid 1000 builder && mkdir /opt/flutter && chown builder:builder /opt/flutter
+USER builder
 RUN git clone --depth 1 --branch ${FLUTTER_VERSION} https://github.com/flutter/flutter.git /opt/flutter
 ENV PATH="/opt/flutter/bin:${PATH}"
-RUN flutter config --no-analytics --no-cli-animations >/dev/null \
- && flutter precache --web
+RUN flutter config --no-analytics --no-cli-animations >/dev/null && flutter precache --web
 
-WORKDIR /src/app
-COPY app/pubspec.yaml app/pubspec.lock ./
+# Created by the builder user (a plain WORKDIR may be created as root and be read-only for the build).
+RUN mkdir -p /home/builder/app
+WORKDIR /home/builder/app
+COPY --chown=builder:builder app/pubspec.yaml app/pubspec.lock ./
 RUN flutter pub get
-COPY app/ ./
+COPY --chown=builder:builder app/ ./
 # No API_URL: the web build talks to the server it was loaded from.
 # --no-web-resources-cdn: CanvasKit is served by us, not from gstatic.com (matches the CSP).
 RUN flutter build web --release --no-web-resources-cdn --no-wasm-dry-run
@@ -32,7 +38,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY backend/src ./src
 COPY backend/migrations ./migrations
 COPY backend/scripts ./scripts
-COPY --from=web /src/app/build/web ./public
+COPY --from=web /home/builder/app/build/web ./public
 ENV WEB_DIR=/app/public \
     DATA_DIR=/data
 EXPOSE 3000
