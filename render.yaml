@@ -1,0 +1,27 @@
+# Render Blueprint: one free web service running the API + the Flutter web app (root Dockerfile).
+# The database is an external free Postgres (e.g. Neon), so DATABASE_URL is entered by hand.
+# Secrets marked `sync: false` are asked for when the Blueprint is created in the Render dashboard.
+services:
+  - type: web
+    name: web-messenger
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL # postgres://user:password@host/db?sslmode=require
+        sync: false
+      - key: MASTER_KEY # base64 of 32 random bytes; keep a copy, without it the data cannot be decrypted
+        sync: false
+      - key: BREVO_API_KEY # transactional email over HTTPS (Render's free tier blocks SMTP)
+        sync: false
+      - key: MAIL_FROM # a sender verified in Brevo, e.g. "Messenger <you@gmail.com>"
+        sync: false
+      - key: MEDIA_STORAGE # the free instance has no persistent disk: keep encrypted media in Postgres
+        value: db
+      - key: DB_POOL_MAX
+        value: "10"
+      - key: LOG_EMAIL_CODES # codes also appear in the Render log (backup if an email is delayed)
+        value: "true"

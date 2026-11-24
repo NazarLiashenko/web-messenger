@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { config } from './config.js';
 
-export const pool = new pg.Pool({ connectionString: config.databaseUrl, max: 20 });
+export const pool = new pg.Pool({ connectionString: config.databaseUrl, max: config.dbPoolMax });
+// Hosted Postgres (Neon, …) closes idle connections; without this handler such an error would crash the process.
+pool.on('error', (e) => console.error('[db] idle client error:', e.message));
 
 export const query = (text, params) => pool.query(text, params);
 

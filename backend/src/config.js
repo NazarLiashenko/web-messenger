@@ -13,6 +13,10 @@ fs.mkdirSync(dataDir, { recursive: true });
  * in the data volume, so `docker compose up` works without any manual setup.
  */
 function loadMasterKey() {
+  if (!env.MASTER_KEY && env.RENDER) {
+    // Render's disk is wiped on every deploy: a generated key would be lost and all data unreadable.
+    throw new Error('MASTER_KEY must be set on Render (base64 of 32 random bytes)');
+  }
   if (env.MASTER_KEY) {
     const key = Buffer.from(env.MASTER_KEY, 'base64');
     if (key.length !== 32) throw new Error('MASTER_KEY must be 32 bytes encoded as base64');
@@ -33,6 +37,11 @@ export const config = {
   databaseUrl: env.DATABASE_URL || 'postgres://messenger:messenger@localhost:5432/messenger',
   dataDir,
   mediaDir: path.join(dataDir, 'media'),
+  mediaStorage: env.MEDIA_STORAGE === 'db' ? 'db' : 'fs',
+  // Built Flutter web app served from the same origin as the API (production image).
+  webDir: env.WEB_DIR || '',
+  dbPoolMax: int(env.DB_POOL_MAX, 20),
+  brevoApiKey: env.BREVO_API_KEY || '',
   masterKey: loadMasterKey(),
   accessTokenTtlSec: int(env.ACCESS_TOKEN_TTL_SEC, 15 * 60),
   refreshTokenTtlDays: int(env.REFRESH_TOKEN_TTL_DAYS, 30),

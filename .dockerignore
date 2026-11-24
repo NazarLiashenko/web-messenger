@@ -1,0 +1,11 @@
+**/node_modules
+**/.dart_tool
+**/build
+**/.git
+.git
+.claude
+**/.env
+**/*.apk
+app/android
+app/ios
+backend/data
