@@ -48,8 +48,8 @@ Stop with `docker compose down` (add `-v` to wipe all data).
 
 ### 2. Get the APK
 
-Download **`messenger.apk`** from the
-[Releases page](https://gitea.kood.tech/nazarliashenko/mobile-messenger/releases) of this repository
+Download **`messenger.apk`** from
+**[Google Drive](https://drive.google.com/drive/folders/1bXbjqTw1QpXQoeDp_w_V3ySQxmh4fUB3?usp=sharing)**
 (the APK is ~55 MB, so it is not committed to git).
 
 ### 3. Point the app at your backend
